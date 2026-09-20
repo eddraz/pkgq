@@ -6,10 +6,9 @@ on:
   pull_request:
 
 jobs:
-  test:
+  native:
     name: ${{ matrix.name }}
-    runs-on: ubuntu-latest
-    container: ${{ matrix.container }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -17,16 +16,6 @@ jobs:
           - name: debian (apt/dpkg)
             os: ubuntu-latest
             expected: apt
-          - name: arch (pacman)
-            os: ubuntu-latest
-            container: archlinux:base-devel
-            install: pacman -Syu --noconfirm git rust jq
-            expected: pacman
-          - name: fedora (dnf/rpm)
-            os: ubuntu-latest
-            container: fedora:latest
-            install: dnf install -y git cargo jq
-            expected: dnf
           - name: macos (brew)
             os: macos-latest
             expected: brew
@@ -34,10 +23,6 @@ jobs:
       EXPECTED_MANAGER: ${{ matrix.expected }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install toolchain (containers)
-        if: matrix.install != ''
-        run: ${{ matrix.install }}
 
       - name: Format check
         run: cargo fmt --check
@@ -50,6 +35,43 @@ jobs:
 
       # Network commands (search/outdated) are user-triggered only; CI keeps
       # to the local inventory smoke so runs stay fast and deterministic.
+      - name: Smoke: inventory detects the platform package manager
+        run: |
+          ./target/release/pkgq list --compact > inventory.json
+          jq -e '.count > 0' inventory.json
+          jq -e --arg m "$EXPECTED_MANAGER" '.managers_detected | index($m) != null' inventory.json
+          echo "detected: $(jq -c '.managers_detected' inventory.json)"
+
+  containers:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: arch (pacman)
+            image: archlinux:base-devel
+            install: pacman -Syu --noconfirm git rust jq
+            expected: pacman
+          - name: fedora (dnf/rpm)
+            image: fedora:latest
+            install: dnf install -y git cargo jq
+            expected: dnf
+    env:
+      EXPECTED_MANAGER: ${{ matrix.expected }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: ${{ matrix.install }}
+
+      - name: Build (release)
+        run: cargo build --release
+
+      - name: Unit tests
+        run: cargo test
+
       - name: Smoke: inventory detects the platform package manager
         run: |
           ./target/release/pkgq list --compact > inventory.json
