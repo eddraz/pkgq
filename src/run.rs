@@ -1,7 +1,7 @@
 //! Orchestration: run the selected providers and shape the JSON output.
 
 use crate::model::{App, ManagerError, ManagerKind, Output};
-use crate::provider::{app_matches_query, detect_available, query_tokens, registry};
+use crate::provider::{detect_available, query_tokens, registry, relevance_score};
 use crate::timefmt;
 
 /// Post-search filters for the `search` command.
@@ -115,18 +115,9 @@ pub fn run_over(
         managers_detected.push(kind);
         let outcome = match (query, filters.installed_only) {
             // Fast path: --installed-only never touches remote catalogs; the
-            // local inventories are matched directly, so the command works
+            // local inventories are scored directly, so the command works
             // offline and returns instantly.
-            (Some(query), true) => {
-                let tokens = query_tokens(query);
-                provider.list_installed().map(|apps| {
-                    apps.into_iter()
-                        .filter(|app| {
-                            app_matches_query(&app.name, app.description.as_deref(), &tokens)
-                        })
-                        .collect::<Vec<_>>()
-                })
-            }
+            (Some(_), true) => provider.list_installed(),
             (Some(query), false) => provider.search(query),
             (None, _) => provider.list_installed(),
         };
@@ -137,13 +128,36 @@ pub fn run_over(
     }
 
     dedup_deb_duplicates(&mut results);
+    if let Some(query) = query {
+        // Relevance gate and ranking: zero-score results (no token hit) are
+        // dropped, and `search` orders by score before falling back to name.
+        let tokens = query_tokens(query);
+        results.retain(|app| relevance_score(&app.name, app.description.as_deref(), &tokens) > 0);
+        if command == "search" {
+            let mut scored: Vec<(i64, App)> = results
+                .drain(..)
+                .map(|app| {
+                    let score = relevance_score(&app.name, app.description.as_deref(), &tokens);
+                    (score, app)
+                })
+                .collect();
+            scored.sort_by(|(score_a, app_a), (score_b, app_b)| {
+                score_b
+                    .cmp(&score_a)
+                    .then_with(|| (&app_a.name, app_a.manager).cmp(&(&app_b.name, app_b.manager)))
+            });
+            results.extend(scored.into_iter().map(|(_, app)| app));
+        }
+    }
     if filters.installed_only {
         results.retain(|app| app.installed);
     }
     if filters.available_only {
         results.retain(|app| !app.installed);
     }
-    results.sort_by(|a, b| (&a.name, a.manager).cmp(&(&b.name, b.manager)));
+    if command != "search" {
+        results.sort_by(|a, b| (&a.name, a.manager).cmp(&(&b.name, b.manager)));
+    }
 
     Output {
         command: command.to_string(),
@@ -290,12 +304,12 @@ mod tests {
         assert_eq!(installed.count, 1);
         assert!(installed.results.iter().all(|a| a.installed));
 
-        // --available-only keeps consulting the catalogs, so both fixture
-        // apps from the available snap provider match the query token.
+        // --available-only keeps consulting the catalogs; the installed app is
+        // filtered out and the query matches the remaining one by name.
         let available = run_over(
             &reg,
             "search",
-            Some("snap"),
+            Some("aa"),
             None,
             SearchFilters {
                 installed_only: false,

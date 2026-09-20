@@ -52,6 +52,58 @@ pub fn detect_available(registry: &[Box<dyn Provider>]) -> Vec<ManagerKind> {
         .collect()
 }
 
+/// True when `needle` appears in `hay` delimited by non-alphanumeric
+/// characters (word boundary), which ranks higher than a bare substring hit.
+pub(crate) fn contains_word(hay: &str, needle: &str) -> bool {
+    if needle.is_empty() || hay.is_empty() {
+        return false;
+    }
+    let mut start = 0;
+    while let Some(offset) = hay[start..].find(needle) {
+        let abs = start + offset;
+        let before_ok = abs == 0 || !hay[..abs].ends_with(|c: char| c.is_alphanumeric());
+        let after = abs + needle.len();
+        let after_ok =
+            after == hay.len() || !hay[after..].starts_with(|c: char| c.is_alphanumeric());
+        if before_ok && after_ok {
+            return true;
+        }
+        start = abs + 1;
+    }
+    false
+}
+
+/// Relevance score of an application for a tokenized query. Every token hit
+/// adds points; name hits outweigh description hits and word-boundary hits
+/// outweigh bare substrings, so AND matches naturally outrank OR matches.
+pub(crate) fn relevance_score(name: &str, description: Option<&str>, tokens: &[String]) -> i64 {
+    if tokens.is_empty() {
+        return 0;
+    }
+    let name_lower = name.to_lowercase();
+    let description_lower = description.unwrap_or("").to_lowercase();
+    let mut score: i64 = 0;
+    for token in tokens {
+        if contains_word(&name_lower, token) {
+            score += 50;
+        } else if name_lower.contains(token) {
+            score += 25;
+        }
+        if contains_word(&description_lower, token) {
+            score += 10;
+        } else if description_lower.contains(token) {
+            score += 3;
+        }
+    }
+    let phrase = tokens.join(" ");
+    if name_lower == phrase {
+        score += 200;
+    } else if !phrase.is_empty() && name_lower.contains(&phrase) {
+        score += 80;
+    }
+    score
+}
+
 /// Split a user query into lowercase tokens for AND matching.
 pub(crate) fn query_tokens(query: &str) -> Vec<String> {
     query
@@ -61,9 +113,10 @@ pub(crate) fn query_tokens(query: &str) -> Vec<String> {
         .collect()
 }
 
-/// True when every token appears (case-insensitively) in the name or the
-/// description; token order is irrelevant and substrings count (`video`
-/// matches "videos").
+/// Permissive candidate gate: true when at least one token appears
+/// (case-insensitively) in the name or the description. Ordering is decided
+/// by [`relevance_score`], so multi-token matches naturally outrank
+/// single-token ones.
 pub(crate) fn app_matches_query(name: &str, description: Option<&str>, tokens: &[String]) -> bool {
     if tokens.is_empty() {
         return false;
@@ -72,7 +125,7 @@ pub(crate) fn app_matches_query(name: &str, description: Option<&str>, tokens: &
     let description_lower = description.unwrap_or("").to_lowercase();
     tokens
         .iter()
-        .all(|token| name_lower.contains(token) || description_lower.contains(token))
+        .any(|token| name_lower.contains(token) || description_lower.contains(token))
 }
 
 /// Merge installed and catalog results for one manager. Installed entries win
@@ -155,7 +208,7 @@ mod tests {
     }
 
     #[test]
-    fn app_matches_when_every_token_hits_name_or_description() {
+    fn app_matches_when_any_token_hits_name_or_description() {
         let tokens = query_tokens("video editor");
         assert!(app_matches_query(
             "kdenlive",
@@ -163,17 +216,46 @@ mod tests {
             &tokens
         ));
         assert!(app_matches_query("VideoEditor", None, &tokens));
-        // Substring counting: "videos" contains "video" but there is no "editor".
-        assert!(!app_matches_query(
+        // OR gate: a single token hit is enough (ranking orders the rest).
+        assert!(app_matches_query(
             "Drift",
             Some("Edit and export videos easily"),
             &tokens
         ));
-        assert!(app_matches_query(
-            "Drift",
-            Some("Edit and export videos easily"),
-            &query_tokens("video")
-        ));
+        assert!(!app_matches_query("Drift", Some("unrelated text"), &tokens));
+    }
+
+    #[test]
+    fn word_boundary_beats_substring() {
+        assert!(contains_word("gnu tar archiving utility", "tar"));
+        // `videos` contains `video` but not as a whole word: substring only.
+        assert!(!contains_word("the videos collection", "video"));
+        assert!(contains_word("a video editor", "video"));
+        assert!(!contains_word("", "video"));
+    }
+
+    #[test]
+    fn relevance_prefers_name_over_description_and_words_over_substrings() {
+        let tokens = query_tokens("tar");
+        let name_word = relevance_score("tar", Some("unrelated"), &tokens);
+        let name_substring = relevance_score("startar", Some("unrelated"), &tokens);
+        let description_word = relevance_score("zzz", Some("a tar utility"), &tokens);
+        let description_substring = relevance_score("zzz", Some("it started"), &tokens);
+        assert!(name_word > name_substring);
+        assert!(name_substring > description_word);
+        assert!(description_word > description_substring);
+    }
+
+    #[test]
+    fn relevance_rewards_phrase_in_name_and_multi_token_hits() {
+        let tokens = query_tokens("video editor");
+        let phrase_name = relevance_score("video editor", None, &tokens);
+        let both_tokens = relevance_score("kdenlive", Some("non-linear video editor"), &tokens);
+        let one_token = relevance_score("drift", Some("export videos"), &tokens);
+        assert!(phrase_name > both_tokens);
+        assert!(both_tokens > one_token);
+        assert!(one_token > 0);
+        assert_eq!(relevance_score("zzz", None, &[]), 0);
     }
 
     #[test]
