@@ -33,7 +33,7 @@ impl From<ManagerArg> for ManagerKind {
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "bash-cli",
+    name = "pkgq",
     version,
     about = "Inventory and search OS applications across package managers, as JSON"
 )]
@@ -123,7 +123,7 @@ mod tests {
 
     #[test]
     fn parses_list_without_options() {
-        let cli = try_parse(&["bash-cli", "list"]).unwrap();
+        let cli = try_parse(&["pkgq", "list"]).unwrap();
         assert!(matches!(cli.command, Command::List { .. }));
         assert!(cli.command.selected_managers().is_none());
         assert!(!cli.command.wants_compact());
@@ -131,7 +131,7 @@ mod tests {
 
     #[test]
     fn parses_manager_list_with_delimiter() {
-        let cli = try_parse(&["bash-cli", "list", "--manager", "apt,flatpak"]).unwrap();
+        let cli = try_parse(&["pkgq", "list", "--manager", "apt,flatpak"]).unwrap();
         assert_eq!(
             cli.command.selected_managers(),
             Some(vec![ManagerKind::Apt, ManagerKind::Flatpak])
@@ -140,13 +140,13 @@ mod tests {
 
     #[test]
     fn rejects_unknown_manager_name() {
-        assert!(try_parse(&["bash-cli", "list", "--manager", "bogus"]).is_err());
+        assert!(try_parse(&["pkgq", "list", "--manager", "bogus"]).is_err());
     }
 
     #[test]
     fn rejects_conflicting_filters() {
         assert!(try_parse(&[
-            "bash-cli",
+            "pkgq",
             "search",
             "curl",
             "--installed-only",
@@ -157,14 +157,7 @@ mod tests {
 
     #[test]
     fn parses_search_filters() {
-        let cli = try_parse(&[
-            "bash-cli",
-            "search",
-            "curl",
-            "--compact",
-            "--installed-only",
-        ])
-        .unwrap();
+        let cli = try_parse(&["pkgq", "search", "curl", "--compact", "--installed-only"]).unwrap();
         let compact = cli.command.wants_compact();
         match cli.command {
             Command::Search {

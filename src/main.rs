@@ -1,4 +1,4 @@
-//! bash-cli: inventory and search OS applications across package managers as JSON.
+//! pkgq: inventory and search OS applications across package managers as JSON.
 
 mod cli;
 mod model;
@@ -50,7 +50,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => {
-            eprintln!("bash-cli: failed to serialize output: {e}");
+            eprintln!("pkgq: failed to serialize output: {e}");
             ExitCode::FAILURE
         }
     }

@@ -1,4 +1,4 @@
-# bash-cli
+# pkgq
 
 Inventory and search OS applications across package managers, outputting JSON.
 Written in Rust; every external command runs exclusively through `bash -c`.
@@ -8,9 +8,9 @@ Primary target: Debian Linux. Other managers are supported opportunistically.
 ## Usage
 
 ```bash
-bash-cli list [--manager m1,m2] [--compact]
-bash-cli search <query> [--manager m1,m2] [--compact] [--installed-only] [--available-only]
-bash-cli outdated [--manager m1,m2] [--compact]
+pkgq list [--manager m1,m2] [--compact]
+pkgq search <query> [--manager m1,m2] [--compact] [--installed-only] [--available-only]
+pkgq outdated [--manager m1,m2] [--compact]
 ```
 
 - `list` — every application currently installed on the system.
@@ -111,7 +111,7 @@ with `LC_ALL=C`.
 
 ```bash
 cargo build --release
-# binary at target/release/bash-cli
+# binary at target/release/pkgq
 ```
 
 Requires Rust 1.x with the 2021 edition. Tests: `cargo test`.

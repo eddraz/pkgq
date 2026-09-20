@@ -1,5 +1,5 @@
 [package]
-name = "bash-cli"
+name = "pkgq"
 version = "0.1.0"
 edition = "2021"
 description = "Inventory and search OS applications across package managers, outputting JSON"
