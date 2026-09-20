@@ -23,6 +23,52 @@ pub fn run_search(query: &str, selected: Option<&[ManagerKind]>, filters: Search
     run_over(&reg, "search", Some(query), selected, filters)
 }
 
+/// Run `outdated` over every detected (optionally filtered) manager.
+pub fn run_outdated(selected: Option<&[ManagerKind]>) -> Output {
+    let reg = registry();
+    run_outdated_over(&reg, selected)
+}
+
+/// Shared outdated pipeline, taking the registry as a parameter for testability.
+pub fn run_outdated_over(
+    reg: &[Box<dyn crate::provider::Provider>],
+    selected: Option<&[ManagerKind]>,
+) -> Output {
+    let available = detect_available(reg);
+    let mut results: Vec<App> = Vec::new();
+    let mut errors: Vec<ManagerError> = Vec::new();
+    let mut managers_detected: Vec<ManagerKind> = Vec::new();
+
+    for provider in reg {
+        let kind = provider.kind();
+        if !available.contains(&kind) {
+            continue;
+        }
+        if let Some(sel) = selected {
+            if !sel.contains(&kind) {
+                continue;
+            }
+        }
+        managers_detected.push(kind);
+        match provider.outdated() {
+            Ok(mut apps) => results.append(&mut apps),
+            Err(e) => errors.push(e),
+        }
+    }
+
+    results.sort_by(|a, b| (&a.name, a.manager).cmp(&(&b.name, b.manager)));
+
+    Output {
+        command: "outdated".to_string(),
+        query: None,
+        managers_detected,
+        generated_at: timefmt::now_rfc3339_utc(),
+        count: results.len(),
+        results,
+        errors,
+    }
+}
+
 /// Shared pipeline, taking the registry as a parameter for testability.
 pub fn run_over(
     reg: &[Box<dyn crate::provider::Provider>],
@@ -130,6 +176,7 @@ mod tests {
             section: None,
             depends: None,
             install_date: None,
+            available_version: None,
         }
     }
 

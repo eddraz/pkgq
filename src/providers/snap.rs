@@ -182,6 +182,7 @@ impl Provider for Snap {
                     section: None,
                     depends: None,
                     install_date: None,
+                    available_version: None,
                     name: name.clone(),
                     manager: ManagerKind::Snap,
                     installed: true,
@@ -231,6 +232,7 @@ impl Provider for Snap {
                     section: None,
                     depends: None,
                     install_date: None,
+                    available_version: None,
                     name: name.clone(),
                     manager: ManagerKind::Snap,
                     installed: true,
@@ -261,6 +263,7 @@ impl Provider for Snap {
                     section: None,
                     depends: None,
                     install_date: None,
+                    available_version: None,
                     name,
                     manager: ManagerKind::Snap,
                     installed: is_installed,
@@ -270,6 +273,41 @@ impl Provider for Snap {
             })
             .collect();
         Ok(merge_installed_and_catalog(installed_apps, catalog))
+    }
+    fn outdated(&self) -> Result<Vec<App>, ManagerError> {
+        let cmd = "LC_ALL=C snap refresh --list 2>/dev/null || true";
+        let output = shell::run_managed(ManagerKind::Snap, cmd)?;
+        let updates = parse_refresh_list(&output);
+        if updates.is_empty() {
+            return Ok(Vec::new());
+        }
+        let current: HashMap<String, String> =
+            parse_snap_list(&shell::run_managed(ManagerKind::Snap, LIST_CMD)?)
+                .into_iter()
+                .collect();
+        Ok(updates
+            .into_iter()
+            .map(|(name, available_version)| App {
+                usage: Some(name.clone()),
+                install: Some(format!("sudo snap refresh {name}")),
+                installed_bytes: None,
+                download_bytes: None,
+                homepage: None,
+                license: None,
+                origin: None,
+                arch: None,
+                maintainer: None,
+                section: None,
+                depends: None,
+                install_date: None,
+                name: name.clone(),
+                manager: ManagerKind::Snap,
+                installed: true,
+                version: current.get(&name).cloned(),
+                description: None,
+                available_version: Some(available_version),
+            })
+            .collect())
     }
 }
 
@@ -360,5 +398,51 @@ mod tests {
         assert_eq!(firefox.installed_bytes, None);
         assert_eq!(firefox.download_bytes, Some(218_000_000));
         assert!(!map.contains_key("missing"));
+    }
+}
+
+/// Parse `snap refresh --list` into (name, new version) rows, ignoring the
+/// header row and the "All snaps up to date." chatter.
+pub(crate) fn parse_refresh_list(output: &str) -> Vec<(String, String)> {
+    let mut in_table = false;
+    let mut rows = Vec::new();
+    for line in output.lines() {
+        if !in_table {
+            in_table = line.starts_with("Name ") || line.starts_with("Name\t");
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        let Some(name) = fields.next() else {
+            continue;
+        };
+        let Some(new_version) = fields.next() else {
+            continue;
+        };
+        rows.push((name.to_string(), new_version.to_string()));
+    }
+    rows
+}
+
+#[cfg(test)]
+mod outdated_tests {
+    use super::*;
+
+    #[test]
+    fn parses_refresh_list_rows_only() {
+        let fixture = concat!(
+            "All snaps up to date.\n",
+            "Name      Version  Rev  Tracking  Publisher  Notes\n",
+            "core22    20260901 1901 latest/stable canonical** base\n",
+            "firefox   157.0    6500 latest/stable mozilla**   -\n",
+        );
+        let rows = parse_refresh_list(fixture);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, "core22");
+        assert_eq!(rows[1].1, "157.0");
+    }
+
+    #[test]
+    fn chatter_without_header_yields_no_updates() {
+        assert!(parse_refresh_list("All snaps up to date.\n").is_empty());
     }
 }

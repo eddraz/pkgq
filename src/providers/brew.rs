@@ -158,6 +158,7 @@ fn to_app(
         section: None,
         depends: brew_info.depends,
         install_date: None,
+        available_version: None,
         name: name.to_string(),
         manager: ManagerKind::Brew,
         installed,
@@ -263,6 +264,49 @@ impl Provider for Brew {
             })
             .collect();
         Ok(merge_installed_and_catalog(installed_apps, catalog))
+    }
+    fn outdated(&self) -> Result<Vec<App>, ManagerError> {
+        let cmd = "LC_ALL=C brew outdated --json=v2 2>/dev/null || true";
+        let output = shell::run_managed(ManagerKind::Brew, cmd)?;
+        let trimmed = output.trim();
+        if trimmed.is_empty() || trimmed == "[]" {
+            return Ok(Vec::new());
+        }
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            return Ok(Vec::new());
+        };
+        let mut apps = Vec::new();
+        for section in ["formulae", "casks"] {
+            let Some(entries) = json.get(section).and_then(serde_json::Value::as_array) else {
+                continue;
+            };
+            for entry in entries {
+                let Some(name) = entry.get("name").and_then(serde_json::Value::as_str) else {
+                    continue;
+                };
+                let installed_version = entry
+                    .get("installed")
+                    .and_then(serde_json::Value::as_array)
+                    .and_then(|versions| versions.first())
+                    .and_then(|installed| installed.get("version"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string);
+                let available_version = entry
+                    .get("current_version")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string);
+                let mut app = to_app(
+                    name,
+                    &installed_version.clone().unwrap_or_default(),
+                    None,
+                    true,
+                    None,
+                );
+                app.available_version = available_version;
+                apps.push(app);
+            }
+        }
+        Ok(apps)
     }
 }
 

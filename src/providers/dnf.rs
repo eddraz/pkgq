@@ -156,6 +156,7 @@ impl Provider for Dnf {
                 section: row.section,
                 depends: None,
                 install_date: row.install_date,
+                available_version: None,
                 name: row.name,
                 manager: ManagerKind::Dnf,
                 installed: true,
@@ -192,6 +193,7 @@ impl Provider for Dnf {
                 section: row.section.clone(),
                 depends: None,
                 install_date: row.install_date.clone(),
+                available_version: None,
                 name: row.name.clone(),
                 manager: ManagerKind::Dnf,
                 installed: true,
@@ -229,6 +231,7 @@ impl Provider for Dnf {
                     section: None,
                     depends: None,
                     install_date: None,
+                    available_version: None,
                     name,
                     manager: ManagerKind::Dnf,
                     installed,
@@ -238,6 +241,45 @@ impl Provider for Dnf {
             })
             .collect();
         Ok(merge_installed_and_catalog(installed_apps, catalog))
+    }
+    fn outdated(&self) -> Result<Vec<App>, ManagerError> {
+        let output = shell::run("LC_ALL=C dnf check-update 2>/dev/null || true").map_err(|e| {
+            ManagerError {
+                manager: ManagerKind::Dnf,
+                message: e.to_string(),
+            }
+        })?;
+        let updates = parse_check_update(&output);
+        if updates.is_empty() {
+            return Ok(Vec::new());
+        }
+        let installed_map: HashMap<String, String> = installed_rows()?
+            .into_iter()
+            .map(|row| (row.name, row.version))
+            .collect();
+        Ok(updates
+            .into_iter()
+            .map(|(name, available_version)| App {
+                usage: None,
+                install: Some(format!("sudo dnf update {name}")),
+                installed_bytes: None,
+                download_bytes: None,
+                homepage: None,
+                license: None,
+                origin: None,
+                arch: None,
+                maintainer: None,
+                section: None,
+                depends: None,
+                install_date: None,
+                name: name.clone(),
+                manager: ManagerKind::Dnf,
+                installed: true,
+                version: installed_map.get(&name).cloned(),
+                description: None,
+                available_version: Some(available_version),
+            })
+            .collect())
     }
 }
 
@@ -298,5 +340,52 @@ mod tests {
     fn arch_suffix_is_stripped() {
         let hits = parse_dnf_search("curl.x86_64 : summary here\n");
         assert_eq!(hits[0].0, "curl");
+    }
+}
+
+/// Parse `dnf check-update` upgrade rows (`name.arch version repo`), skipping
+/// headers, the obsoletes section and metadata lines.
+pub(crate) fn parse_check_update(output: &str) -> Vec<(String, String)> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('=') {
+                return None;
+            }
+            let mut fields = line.split_whitespace();
+            let package = fields.next()?;
+            let version = fields.next()?;
+            // Upgrade rows are `name.arch` followed by a numeric version.
+            if !version.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                return None;
+            }
+            let name = package.split('.').next()?.to_string();
+            if name.is_empty() {
+                return None;
+            }
+            Some((name, version.to_string()))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod outdated_tests {
+    use super::*;
+
+    #[test]
+    fn parses_check_update_rows_and_skips_sections() {
+        let fixture = concat!(
+            "Last metadata expiration check: 0:01:01 ago.\n",
+            "curl.x86_64    8.15.0-1.fc41    updates\n",
+            "vim.minimal.x86_64    9.1.0-1.fc41    updates\n",
+            "Obsoleting Packages\n",
+            "oldpkg.noarch    1.0-1    updates\n",
+        );
+        let rows = parse_check_update(fixture);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].0, "curl");
+        assert_eq!(rows[0].1, "8.15.0-1.fc41");
+        assert_eq!(rows[2].0, "oldpkg");
     }
 }

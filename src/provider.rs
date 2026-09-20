@@ -18,6 +18,13 @@ pub trait Provider {
 
     /// Search installed and available applications matching `query`.
     fn search(&self, query: &str) -> Result<Vec<App>, ManagerError>;
+
+    /// Installed applications that have a newer version available. `version`
+    /// keeps the installed one and `available_version` carries the candidate;
+    /// managers that cannot detect upgrades return an empty list.
+    fn outdated(&self) -> Result<Vec<App>, ManagerError> {
+        Ok(Vec::new())
+    }
 }
 
 /// All providers, in canonical `ManagerKind::ALL` order.
@@ -129,6 +136,7 @@ mod tests {
             section: None,
             depends: None,
             install_date: None,
+            available_version: None,
         }
     }
 

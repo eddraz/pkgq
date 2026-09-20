@@ -262,11 +262,49 @@ impl Provider for Apt {
                     section: show_details.and_then(|d| d.section.clone()),
                     depends: show_details.and_then(|d| d.depends.clone()),
                     install_date: None,
+                    available_version: None,
                     name,
                     manager: ManagerKind::Apt,
                     installed,
                     version,
                     description,
+                }
+            })
+            .collect())
+    }
+    fn outdated(&self) -> Result<Vec<App>, ManagerError> {
+        let cmd = "LC_ALL=C apt list --upgradable 2>/dev/null || true";
+        let output = shell::run_managed(ManagerKind::Apt, cmd)?;
+        let upgrades = parse_upgradable_output(&output);
+        if upgrades.is_empty() {
+            return Ok(Vec::new());
+        }
+        let names: Vec<&str> = upgrades.iter().map(|u| u.name.as_str()).collect();
+        let details = apt_show_details_map(&names);
+        let bins = dpkg::binary_map();
+        Ok(upgrades
+            .into_iter()
+            .map(|u| {
+                let show = details.get(&u.name);
+                App {
+                    usage: bins.get(&u.name).cloned(),
+                    install: Some(format!("sudo apt install {}", u.name)),
+                    installed_bytes: show.and_then(|d| d.installed_bytes),
+                    download_bytes: show.and_then(|d| d.download_bytes),
+                    homepage: show.and_then(|d| d.homepage.clone()),
+                    license: None,
+                    origin: None,
+                    arch: show.and_then(|d| d.arch.clone()),
+                    maintainer: show.and_then(|d| d.maintainer.clone()),
+                    section: show.and_then(|d| d.section.clone()),
+                    depends: show.and_then(|d| d.depends.clone()),
+                    install_date: None,
+                    name: u.name,
+                    manager: ManagerKind::Apt,
+                    installed: true,
+                    version: u.installed_version,
+                    description: None,
+                    available_version: u.available_version,
                 }
             })
             .collect())
@@ -352,5 +390,66 @@ mod tests {
         let map = parse_policy_output(POLICY_FIXTURE);
         // "Version table:" line starts with a space and must not create fields.
         assert!(map.get("curl").unwrap().candidate.as_deref() != Some("table:"));
+    }
+}
+
+/// One `apt list --upgradable` row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Upgrade {
+    pub name: String,
+    pub installed_version: Option<String>,
+    pub available_version: Option<String>,
+}
+
+/// Parse `apt list --upgradable` output, skipping the `Listing...` header.
+pub(crate) fn parse_upgradable_output(output: &str) -> Vec<Upgrade> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || !line.contains('/') || line.starts_with("Listing") {
+                return None;
+            }
+            let name = line.split('/').next()?.trim().to_string();
+            if name.is_empty() {
+                return None;
+            }
+            let mut fields = line.split_whitespace();
+            fields.next();
+            let available_version = fields.next().map(str::to_string);
+            let installed_version = line
+                .split("[upgradable from: ")
+                .nth(1)
+                .and_then(|rest| rest.strip_suffix(']'))
+                .map(str::to_string);
+            Some(Upgrade {
+                name,
+                installed_version,
+                available_version,
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod outdated_tests {
+    use super::*;
+
+    #[test]
+    fn parses_upgradable_rows_with_from_versions() {
+        let fixture = concat!(
+            "Listing... Done\n",
+            "curl/trixie 8.21.0 amd64 [upgradable from: 8.14.1-2+deb13u5]\n",
+            "vim/stable 2:9.1.0 amd64\n",
+        );
+        let rows = parse_upgradable_output(fixture);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].name, "curl");
+        assert_eq!(
+            rows[0].installed_version.as_deref(),
+            Some("8.14.1-2+deb13u5")
+        );
+        assert_eq!(rows[0].available_version.as_deref(), Some("8.21.0"));
+        assert_eq!(rows[1].installed_version, None);
     }
 }

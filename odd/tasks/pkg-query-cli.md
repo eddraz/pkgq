@@ -78,6 +78,9 @@ bash-cli search <query> [--manager m1,m2] [--compact] [--installed-only] [--avai
 
 - [x] T6: size_bytes per app (installed size / download size, null unknown) — in progress
 
+- [x] T7: identity/origin/metadata fields + size split — commit pending
+- [x] T8: outdated command — in progress
+
 ## Evidence log
 
 - T1: commit 2b29fcf — 25/25 tests, fmt clean.

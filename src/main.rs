@@ -19,6 +19,7 @@ fn main() -> ExitCode {
 
     let output = match &parsed.command {
         cli::Command::List { .. } => run::run_list(selected.as_deref()),
+        cli::Command::Outdated { .. } => run::run_outdated(selected.as_deref()),
         cli::Command::Search {
             query,
             installed_only,

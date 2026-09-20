@@ -87,6 +87,7 @@ fn row_to_app(row: &FlatpakRow, installed: bool, description: Option<String>) ->
         section: None,
         depends: None,
         install_date: None,
+        available_version: None,
         name: row.name.clone(),
         manager: ManagerKind::Flatpak,
         installed,
@@ -137,6 +138,24 @@ impl Provider for Flatpak {
             })
             .collect();
         Ok(merge_installed_and_catalog(installed_apps, catalog))
+    }
+    fn outdated(&self) -> Result<Vec<App>, ManagerError> {
+        let cmd = "LC_ALL=C flatpak remote-ls --updates --columns=application,version 2>/dev/null || true";
+        let output = shell::run_managed(ManagerKind::Flatpak, cmd)?;
+        let updates = parse_remote_updates(&output);
+        if updates.is_empty() {
+            return Ok(Vec::new());
+        }
+        let installed = installed_rows()?;
+        Ok(updates
+            .into_iter()
+            .filter_map(|(id, available_version)| {
+                let row = installed.iter().find(|row| row.id == id)?;
+                let mut app = row_to_app(row, true, None);
+                app.available_version = available_version.filter(|value| !value.is_empty());
+                Some(app)
+            })
+            .collect())
     }
 }
 
@@ -205,5 +224,47 @@ mod tests {
         assert_eq!(rows[0].installed_bytes, None);
         assert_eq!(rows[0].origin, None);
         assert_eq!(rows[0].arch, None);
+    }
+}
+
+/// Parse `flatpak remote-ls --updates` (id, version) rows.
+pub(crate) fn parse_remote_updates(output: &str) -> Vec<(String, Option<String>)> {
+    output
+        .lines()
+        .filter_map(|line| {
+            if !line.contains('\t') {
+                return None;
+            }
+            let mut parts = line.splitn(2, '\t');
+            let id = parts.next()?.trim().to_string();
+            if id.is_empty() {
+                return None;
+            }
+            let version = parts
+                .next()
+                .map(str::trim)
+                .filter(|value| !value.is_empty() && *value != "-")
+                .map(str::to_string);
+            Some((id, version))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod outdated_tests {
+    use super::*;
+
+    #[test]
+    fn parses_remote_update_rows() {
+        let fixture = concat!(
+            "org.vim.Vim\t9.1.0\n",
+            "org.mozilla.firefox\t-\n",
+            "No updates\n",
+        );
+        let rows = parse_remote_updates(fixture);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, "org.vim.Vim");
+        assert_eq!(rows[0].1.as_deref(), Some("9.1.0"));
+        assert_eq!(rows[1].1, None);
     }
 }

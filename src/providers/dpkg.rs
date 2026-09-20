@@ -121,6 +121,7 @@ fn row_to_app(row: DpkgRow, bins: &HashMap<String, String>) -> App {
         section: None,
         depends: None,
         install_date: None,
+        available_version: None,
         name,
         manager: ManagerKind::Dpkg,
         installed: true,

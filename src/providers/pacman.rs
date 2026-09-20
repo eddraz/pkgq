@@ -226,6 +226,7 @@ impl Provider for Pacman {
                     section: None,
                     depends: None,
                     install_date: pkg_details.and_then(|d| d.install_date.clone()),
+                    available_version: None,
                     name,
                     manager: ManagerKind::Pacman,
                     installed: true,
@@ -274,6 +275,7 @@ impl Provider for Pacman {
                     section: None,
                     depends: None,
                     install_date: pkg_details.and_then(|d| d.install_date.clone()),
+                    available_version: None,
                     name: (*name).clone(),
                     manager: ManagerKind::Pacman,
                     installed: true,
@@ -306,6 +308,7 @@ impl Provider for Pacman {
                     section: None,
                     depends: None,
                     install_date: None,
+                    available_version: None,
                     name: hit.name,
                     manager: ManagerKind::Pacman,
                     installed,
@@ -315,6 +318,36 @@ impl Provider for Pacman {
             })
             .collect();
         Ok(merge_installed_and_catalog(installed_apps, catalog))
+    }
+    fn outdated(&self) -> Result<Vec<App>, ManagerError> {
+        let output =
+            shell::run("LC_ALL=C pacman -Qu 2>/dev/null || true").map_err(|e| ManagerError {
+                manager: ManagerKind::Pacman,
+                message: e.to_string(),
+            })?;
+        Ok(parse_qu_output(&output)
+            .into_iter()
+            .map(|(name, installed_version, available_version)| App {
+                usage: None,
+                install: Some(format!("sudo pacman -S {name}")),
+                installed_bytes: None,
+                download_bytes: None,
+                homepage: None,
+                license: None,
+                origin: None,
+                arch: None,
+                maintainer: None,
+                section: None,
+                depends: None,
+                install_date: None,
+                name,
+                manager: ManagerKind::Pacman,
+                installed: true,
+                version: Some(installed_version),
+                description: None,
+                available_version: Some(available_version),
+            })
+            .collect())
     }
 }
 
@@ -373,5 +406,34 @@ mod tests {
     fn strips_version_from_package_directory() {
         let map = parse_files_output("/var/lib/pacman/local/vim-9.1.0821-1/files:usr/bin/vim\n");
         assert_eq!(map.get("vim").map(String::as_str), Some("vim"));
+    }
+}
+
+/// Parse `pacman -Qu` rows shaped `name oldver -> newver`.
+pub(crate) fn parse_qu_output(output: &str) -> Vec<(String, String, String)> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let (left, new_version) = line.split_once(" -> ")?;
+            let mut fields = left.split_whitespace();
+            let name = fields.next()?.to_string();
+            let old_version = fields.next()?.to_string();
+            Some((name, old_version, new_version.trim().to_string()))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod outdated_tests {
+    use super::*;
+
+    #[test]
+    fn parses_qu_rows_with_old_and_new_versions() {
+        let fixture = concat!("curl 8.14.1-1 -> 8.14.1-2\n", "vim 9.0-1 -> 9.1-2\n",);
+        let rows = parse_qu_output(fixture);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, "curl");
+        assert_eq!(rows[0].1, "8.14.1-1");
+        assert_eq!(rows[0].2, "8.14.1-2");
     }
 }

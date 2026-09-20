@@ -54,6 +54,16 @@ pub enum Command {
         #[arg(long)]
         compact: bool,
     },
+    /// List installed applications that have a newer version available.
+    Outdated {
+        /// Only consult these comma-separated managers
+        /// (apt,dpkg,flatpak,snap,brew,pacman,dnf).
+        #[arg(long, value_delimiter = ',')]
+        manager: Vec<ManagerArg>,
+        /// Emit single-line JSON instead of pretty-printed.
+        #[arg(long)]
+        compact: bool,
+    },
     /// Search applications, installed or available, across detected package managers.
     Search {
         /// Text matched against package names and descriptions.
@@ -78,7 +88,9 @@ impl Command {
     /// Managers selected through `--manager`; `None` means every detected manager.
     pub fn selected_managers(&self) -> Option<Vec<ManagerKind>> {
         let args = match self {
-            Command::List { manager, .. } | Command::Search { manager, .. } => manager,
+            Command::List { manager, .. }
+            | Command::Search { manager, .. }
+            | Command::Outdated { manager, .. } => manager,
         };
         (!args.is_empty()).then(|| args.iter().map(|arg| ManagerKind::from(*arg)).collect())
     }
@@ -86,7 +98,9 @@ impl Command {
     /// Whether compact (single-line) JSON output was requested.
     pub fn wants_compact(&self) -> bool {
         match self {
-            Command::List { compact, .. } | Command::Search { compact, .. } => *compact,
+            Command::List { compact, .. }
+            | Command::Search { compact, .. }
+            | Command::Outdated { compact, .. } => *compact,
         }
     }
 }

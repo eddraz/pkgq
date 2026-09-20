@@ -64,6 +64,9 @@ pub struct App {
     /// When the app was installed. RFC3339 when derivable, otherwise the
     /// manager-reported string; null for available-only apps.
     pub install_date: Option<String>,
+    /// Newer version available for this installed app; only filled by the
+    /// `outdated` command.
+    pub available_version: Option<String>,
 }
 
 /// Parse human-formatted sizes such as `70.2 MB`, `77MB`, `5.36 MiB`, `512 B`.
@@ -163,6 +166,7 @@ mod tests {
             section: None,
             depends: None,
             install_date: None,
+            available_version: None,
         };
         // serde_json::to_value normalizes into a sorted map, so field order
         // must be asserted against the serialized string itself.
@@ -185,6 +189,7 @@ mod tests {
             "\"section\":",
             "\"depends\":",
             "\"install_date\":",
+            "\"available_version\":",
         ];
         let mut last = 0;
         for k in keys {
