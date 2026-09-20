@@ -29,6 +29,11 @@ pub(crate) fn parse_columns_output(output: &str) -> Vec<FlatpakRow> {
     let mut seen: HashSet<&str> = HashSet::new();
     let mut rows = Vec::new();
     for line in output.lines() {
+        // `flatpak search` prints human messages such as `No matches found`
+        // instead of table rows; real rows are always tab-separated.
+        if !line.contains('\t') {
+            continue;
+        }
         let Some(id) = line.split('\t').next() else {
             continue;
         };
@@ -143,6 +148,11 @@ mod tests {
     #[test]
     fn skips_blank_lines() {
         assert!(parse_columns_output("\n\n").is_empty());
+    }
+
+    #[test]
+    fn skips_no_matches_message_without_tabs() {
+        assert!(parse_columns_output("No matches found\n").is_empty());
     }
 
     #[test]

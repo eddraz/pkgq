@@ -16,55 +16,11 @@ pub enum ManagerKind {
 }
 
 impl ManagerKind {
-    /// All known managers, in canonical order.
-    pub const ALL: [ManagerKind; 7] = [
-        ManagerKind::Apt,
-        ManagerKind::Dpkg,
-        ManagerKind::Flatpak,
-        ManagerKind::Snap,
-        ManagerKind::Brew,
-        ManagerKind::Pacman,
-        ManagerKind::Dnf,
-    ];
-
     /// The executable that must exist on PATH for this manager to be detected.
     pub fn binary(&self) -> &'static str {
         match self {
             ManagerKind::Apt => "apt-cache",
             ManagerKind::Dpkg => "dpkg-query",
-            ManagerKind::Flatpak => "flatpak",
-            ManagerKind::Snap => "snap",
-            ManagerKind::Brew => "brew",
-            ManagerKind::Pacman => "pacman",
-            ManagerKind::Dnf => "dnf",
-        }
-    }
-
-    /// Parse a comma-separated manager list such as `"apt,flatpak"`.
-    pub fn parse_list(spec: &str) -> Result<Vec<ManagerKind>, String> {
-        let mut out = Vec::new();
-        for token in spec.split(',') {
-            let token = token.trim();
-            if token.is_empty() {
-                continue;
-            }
-            let kind = ManagerKind::ALL
-                .iter()
-                .copied()
-                .find(|k| k.name() == token)
-                .ok_or_else(|| format!("unknown manager `{token}`"))?;
-            if !out.contains(&kind) {
-                out.push(kind);
-            }
-        }
-        Ok(out)
-    }
-
-    /// Lowercase name used both in JSON and on the CLI.
-    pub fn name(&self) -> &'static str {
-        match self {
-            ManagerKind::Apt => "apt",
-            ManagerKind::Dpkg => "dpkg",
             ManagerKind::Flatpak => "flatpak",
             ManagerKind::Snap => "snap",
             ManagerKind::Brew => "brew",
@@ -184,16 +140,5 @@ mod tests {
             assert!(pos > last, "key {k} out of order in {s}");
             last = pos;
         }
-    }
-
-    #[test]
-    fn parse_list_accepts_valid_and_dedupes() {
-        let parsed = ManagerKind::parse_list("apt, flatpak,apt").unwrap();
-        assert_eq!(parsed, vec![ManagerKind::Apt, ManagerKind::Flatpak]);
-    }
-
-    #[test]
-    fn parse_list_rejects_unknown_manager() {
-        assert!(ManagerKind::parse_list("apt,bogus").is_err());
     }
 }

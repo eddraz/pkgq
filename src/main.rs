@@ -15,18 +15,18 @@ use clap::Parser as _;
 
 fn main() -> ExitCode {
     let parsed = cli::Cli::parse();
+    let selected = parsed.command.selected_managers();
 
     let output = match &parsed.command {
-        cli::Command::List { manager, .. } => run::run_list(selected(manager).as_deref()),
+        cli::Command::List { .. } => run::run_list(selected.as_deref()),
         cli::Command::Search {
             query,
-            manager,
             installed_only,
             available_only,
             ..
         } => run::run_search(
             query,
-            selected(manager).as_deref(),
+            selected.as_deref(),
             run::SearchFilters {
                 installed_only: *installed_only,
                 available_only: *available_only,
@@ -53,13 +53,4 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
-}
-
-/// Map the CLI manager arguments to domain kinds; `None` means every detected manager.
-fn selected(args: &[cli::ManagerArg]) -> Option<Vec<model::ManagerKind>> {
-    (!args.is_empty()).then(|| {
-        args.iter()
-            .map(|arg| model::ManagerKind::from(*arg))
-            .collect()
-    })
 }

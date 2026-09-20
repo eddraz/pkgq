@@ -1,7 +1,6 @@
 //! Homebrew provider: installed formulae/casks and catalog search.
 
 use std::collections::HashMap;
-use std::collections::HashSet;
 
 use crate::model::{App, ManagerError, ManagerKind};
 use crate::provider::Provider;
