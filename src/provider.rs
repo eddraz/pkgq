@@ -21,12 +21,17 @@ pub trait Provider {
 
 /// All providers, in canonical `ManagerKind::ALL` order.
 pub fn registry() -> Vec<Box<dyn Provider>> {
-    use crate::providers::{apt::Apt, dpkg::Dpkg, flatpak::Flatpak, snap::Snap};
+    use crate::providers::{
+        apt::Apt, brew::Brew, dnf::Dnf, dpkg::Dpkg, flatpak::Flatpak, pacman::Pacman, snap::Snap,
+    };
     vec![
         Box::new(Apt),
         Box::new(Dpkg),
         Box::new(Flatpak),
         Box::new(Snap),
+        Box::new(Brew),
+        Box::new(Pacman),
+        Box::new(Dnf),
     ]
 }
 
