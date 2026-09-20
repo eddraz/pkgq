@@ -13,7 +13,10 @@ bash-cli search <query> [--manager m1,m2] [--compact] [--installed-only] [--avai
 ```
 
 - `list` — every application currently installed on the system.
-- `search` — installed **and** available applications matching a query.
+- `search` — the **union** of the installed inventory and each manager's
+  catalog results, matched with AND semantics over whitespace-separated
+  tokens (case-insensitive, substrings count). Installed apps are found even
+  when a manager's remote search does not surface them.
 - `--manager` — restrict to a comma-separated subset of `apt,dpkg,flatpak,snap,brew,pacman,dnf`.
 - Output is always JSON: pretty-printed by default, single line with `--compact`.
 - Exit code is `0` even when a manager fails; failures are reported in the `errors` array.

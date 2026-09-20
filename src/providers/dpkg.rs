@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use crate::model::{App, ManagerError, ManagerKind};
-use crate::provider::Provider;
+use crate::provider::{app_matches_query, query_tokens, Provider};
 use crate::shell;
 
 pub struct Dpkg;
@@ -91,34 +91,47 @@ pub(crate) fn parse_list_files_output(output: &str) -> HashMap<String, String> {
     map
 }
 
+/// Convert an installed-deb row into an `App`, looking up its executable.
+fn row_to_app(row: DpkgRow, bins: &HashMap<String, String>) -> App {
+    let name = row.name.clone();
+    App {
+        usage: bins.get(&name).cloned(),
+        install: Some(format!("sudo apt install {name}")),
+        name,
+        manager: ManagerKind::Dpkg,
+        installed: true,
+        version: Some(row.version),
+        description: row.description,
+    }
+}
+
 impl Provider for Dpkg {
     fn kind(&self) -> ManagerKind {
         ManagerKind::Dpkg
     }
 
     fn list_installed(&self) -> Result<Vec<App>, ManagerError> {
-        let rows = installed_rows()?;
         let bins = binary_map();
-        Ok(rows
+        Ok(installed_rows()?
             .into_iter()
-            .map(|row| {
-                let name = row.name.clone();
-                App {
-                    usage: bins.get(&name).cloned(),
-                    install: Some(format!("sudo apt install {name}")),
-                    name,
-                    manager: ManagerKind::Dpkg,
-                    installed: true,
-                    version: Some(row.version),
-                    description: row.description,
-                }
-            })
+            .map(|row| row_to_app(row, &bins))
             .collect())
     }
 
-    fn search(&self, _query: &str) -> Result<Vec<App>, ManagerError> {
-        // Available-catalog search is the apt provider's responsibility.
-        Ok(Vec::new())
+    fn search(&self, query: &str) -> Result<Vec<App>, ManagerError> {
+        // The dpkg side of search covers locally installed debs even when
+        // apt-cache cannot surface them (e.g. local .deb installs missing
+        // from any configured repository).
+        let tokens = query_tokens(query);
+        if tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+        let bins = binary_map();
+        Ok(installed_rows()?
+            .into_iter()
+            .filter(|row| app_matches_query(&row.name, row.description.as_deref(), &tokens))
+            .map(|row| row_to_app(row, &bins))
+            .collect())
     }
 }
 

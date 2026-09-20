@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::model::{App, ManagerError, ManagerKind};
-use crate::provider::Provider;
+use crate::provider::{app_matches_query, merge_installed_and_catalog, query_tokens, Provider};
 use crate::shell;
 
 pub struct Dnf;
@@ -121,27 +121,42 @@ impl Provider for Dnf {
     }
 
     fn search(&self, query: &str) -> Result<Vec<App>, ManagerError> {
+        let tokens = query_tokens(query);
+        if tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+        let local_rows = installed_rows()?;
+        let installed_map: HashMap<String, String> = local_rows
+            .iter()
+            .map(|row| (row.name.clone(), row.version.clone()))
+            .collect();
+        let installed_names: HashSet<&str> = installed_map.keys().map(String::as_str).collect();
+        let installed_apps: Vec<App> = local_rows
+            .iter()
+            .filter(|row| app_matches_query(&row.name, row.description.as_deref(), &tokens))
+            .map(|row| App {
+                usage: None,
+                install: Some(format!("sudo dnf install {}", row.name)),
+                name: row.name.clone(),
+                manager: ManagerKind::Dnf,
+                installed: true,
+                version: Some(row.version.clone()),
+                description: row.description.clone(),
+            })
+            .collect();
         let cmd = format!(
             "LC_ALL=C dnf search {} 2>/dev/null || true",
             shell::quote(query)
         );
         let output = shell::run_managed(ManagerKind::Dnf, &cmd)?;
         let hits = parse_dnf_search(&output);
-        if hits.is_empty() {
-            return Ok(Vec::new());
-        }
-        let installed_map: HashMap<String, String> = installed_rows()?
-            .into_iter()
-            .map(|row| (row.name, row.version))
-            .collect();
-        let installed_names: HashSet<&str> = installed_map.keys().map(String::as_str).collect();
         let bin_names: Vec<&str> = hits
             .iter()
             .filter(|(name, _)| installed_names.contains(name.as_str()))
             .map(|(name, _)| name.as_str())
             .collect();
         let bins = binary_map(&bin_names);
-        Ok(hits
+        let catalog: Vec<App> = hits
             .into_iter()
             .map(|(name, description)| {
                 let installed = installed_names.contains(name.as_str());
@@ -156,7 +171,8 @@ impl Provider for Dnf {
                     description,
                 }
             })
-            .collect())
+            .collect();
+        Ok(merge_installed_and_catalog(installed_apps, catalog))
     }
 }
 

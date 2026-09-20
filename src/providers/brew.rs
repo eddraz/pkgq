@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::model::{App, ManagerError, ManagerKind};
-use crate::provider::Provider;
+use crate::provider::{app_matches_query, merge_installed_and_catalog, query_tokens, Provider};
 use crate::shell;
 
 pub struct Brew;
@@ -120,19 +120,31 @@ impl Provider for Brew {
     }
 
     fn search(&self, query: &str) -> Result<Vec<App>, ManagerError> {
+        let tokens = query_tokens(query);
+        if tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+        let installed: HashMap<String, String> = installed_pairs()?.into_iter().collect();
+        // Installed kegs absent from catalog output still match by name.
+        let installed_apps: Vec<App> = installed
+            .iter()
+            .filter(|(name, _)| app_matches_query(name, None, &tokens))
+            .map(|(name, version)| {
+                let description = info_map(&[name.as_str()])
+                    .remove(name)
+                    .and_then(|(desc, _)| desc);
+                to_app(name, version, description, true)
+            })
+            .collect();
         let cmd = format!(
             "LC_ALL=C brew search {} 2>/dev/null || true",
             shell::quote(query)
         );
         let output = shell::run_managed(ManagerKind::Brew, &cmd)?;
         let names = parse_search_output(&output);
-        if names.is_empty() {
-            return Ok(Vec::new());
-        }
-        let installed: HashMap<String, String> = installed_pairs()?.into_iter().collect();
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
         let info = info_map(&refs);
-        Ok(names
+        let catalog: Vec<App> = names
             .iter()
             .map(|name| {
                 let (description, catalog_version) =
@@ -147,7 +159,8 @@ impl Provider for Brew {
                 .unwrap_or_default();
                 to_app(name, &version, description, is_installed)
             })
-            .collect())
+            .collect();
+        Ok(merge_installed_and_catalog(installed_apps, catalog))
     }
 }
 

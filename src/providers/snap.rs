@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::model::{App, ManagerError, ManagerKind};
-use crate::provider::Provider;
+use crate::provider::{app_matches_query, merge_installed_and_catalog, query_tokens, Provider};
 use crate::shell;
 
 pub struct Snap;
@@ -112,15 +112,6 @@ pub(crate) fn parse_summary_output(output: &str) -> HashMap<String, String> {
     map
 }
 
-/// Names of currently installed snaps (one snap call).
-pub(crate) fn installed_names() -> Result<Vec<String>, ManagerError> {
-    let output = shell::run_managed(ManagerKind::Snap, LIST_CMD)?;
-    Ok(parse_snap_list(&output)
-        .into_iter()
-        .map(|(name, _)| name)
-        .collect())
-}
-
 impl Provider for Snap {
     fn kind(&self) -> ManagerKind {
         ManagerKind::Snap
@@ -148,31 +139,56 @@ impl Provider for Snap {
     }
 
     fn search(&self, query: &str) -> Result<Vec<App>, ManagerError> {
+        let tokens = query_tokens(query);
+        if tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = parse_snap_list(&shell::run_managed(ManagerKind::Snap, LIST_CMD)?);
+        let installed_set: HashSet<String> = rows.iter().map(|(name, _)| name.clone()).collect();
+        // Summaries require one `snap info` per snap; only pay it when there
+        // is an inventory to describe.
+        let summaries = if rows.is_empty() {
+            HashMap::new()
+        } else {
+            let names: Vec<&str> = rows.iter().map(|(name, _)| name.as_str()).collect();
+            summary_map(&names)
+        };
+        let installed_apps: Vec<App> = rows
+            .iter()
+            .filter(|(name, _)| {
+                app_matches_query(name, summaries.get(name).map(String::as_str), &tokens)
+            })
+            .map(|(name, version)| App {
+                usage: Some(name.clone()),
+                install: Some(format!("sudo snap install {name}")),
+                name: name.clone(),
+                manager: ManagerKind::Snap,
+                installed: true,
+                version: Some(version.clone()),
+                description: summaries.get(name).cloned(),
+            })
+            .collect();
         let cmd = format!(
             "LC_ALL=C snap find {} 2>/dev/null || true",
             shell::quote(query)
         );
         let output = shell::run_managed(ManagerKind::Snap, &cmd)?;
-        let rows = parse_snap_find(&output);
-        if rows.is_empty() {
-            return Ok(Vec::new());
-        }
-        let installed: HashSet<String> = installed_names()?.into_iter().collect();
-        Ok(rows
+        let catalog: Vec<App> = parse_snap_find(&output)
             .into_iter()
             .map(|(name, version, summary)| {
-                let installed = installed.contains(&name);
+                let is_installed = installed_set.contains(&name);
                 App {
                     usage: Some(name.clone()),
                     install: Some(format!("sudo snap install {name}")),
-                    name: name.clone(),
+                    name,
                     manager: ManagerKind::Snap,
-                    installed,
+                    installed: is_installed,
                     version: Some(version),
                     description: Some(summary),
                 }
             })
-            .collect())
+            .collect();
+        Ok(merge_installed_and_catalog(installed_apps, catalog))
     }
 }
 

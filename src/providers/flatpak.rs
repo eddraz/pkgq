@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 
 use crate::model::{App, ManagerError, ManagerKind};
-use crate::provider::Provider;
+use crate::provider::{app_matches_query, merge_installed_and_catalog, query_tokens, Provider};
 use crate::shell;
 
 pub struct Flatpak;
@@ -89,24 +89,35 @@ impl Provider for Flatpak {
     }
 
     fn search(&self, query: &str) -> Result<Vec<App>, ManagerError> {
+        let tokens = query_tokens(query);
+        if tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+        let installed = installed_rows()?;
+        let installed_ids: HashSet<String> = installed.iter().map(|row| row.id.clone()).collect();
+        // Installed apps must be searchable even when the remote full-text
+        // index does not surface them for the same query.
+        let installed_apps: Vec<App> = installed
+            .iter()
+            .filter(|row| {
+                app_matches_query(&row.id, row.description.as_deref(), &tokens)
+                    || app_matches_query(&row.name, row.description.as_deref(), &tokens)
+            })
+            .map(|row| row_to_app(row, true, None))
+            .collect();
         let cmd = format!(
             "LC_ALL=C flatpak search {} {SEARCH_COLUMNS} 2>/dev/null || true",
             shell::quote(query)
         );
         let output = shell::run_managed(ManagerKind::Flatpak, &cmd)?;
-        let rows = parse_columns_output(&output);
-        if rows.is_empty() {
-            return Ok(Vec::new());
-        }
-        let installed_ids: HashSet<String> =
-            installed_rows()?.into_iter().map(|row| row.id).collect();
-        Ok(rows
+        let catalog: Vec<App> = parse_columns_output(&output)
             .iter()
             .map(|row| {
-                let installed = installed_ids.contains(&row.id);
-                row_to_app(row, installed, None)
+                let is_installed = installed_ids.contains(&row.id);
+                row_to_app(row, is_installed, None)
             })
-            .collect())
+            .collect();
+        Ok(merge_installed_and_catalog(installed_apps, catalog))
     }
 }
 

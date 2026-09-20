@@ -72,7 +72,9 @@ bash-cli search <query> [--manager m1,m2] [--compact] [--installed-only] [--avai
 - [x] T1: Scaffold + domain model + bash adapter + Provider trait + detection + CLI skeleton — commit 2b29fcf
 - [x] T2: Providers deb (apt/dpkg) + universal (flatpak/snap) with parser tests — commit c4ac331
 - [x] T3: External providers (brew/pacman/dnf) with parser tests + README — commit fc7ea89
-- [x] T4: Local end-to-end verification (inline; gentle-ai-verify unavailable) — commit pending
+- [x] T4: Local end-to-end verification (inline; gentle-ai-verify unavailable) — commits faf3bde, 4bab89e
+
+- [x] T5: search unions installed inventory with catalog results (token matching) — in progress
 
 ## Evidence log
 
@@ -82,6 +84,13 @@ bash-cli search <query> [--manager m1,m2] [--compact] [--installed-only] [--avai
 - T4: commit (this) — 51/51 tests, 0 warnings; 11-check battery 11/11 after
   fixing flatpak "No matches found" message leak; per-manager source parity
   verified (apt 170, flatpak 4, snap 40, brew 12).
+- T5: defect reported by user — installed flatpak Drift invisible to search
+  because providers only queried remote catalogs. Fix: search = union of
+  token-filtered installed inventory + catalog results per provider (new
+  helpers query_tokens/app_matches_query/merge_installed_and_catalog);
+  dpkg.search now covers local debs absent from apt cache. 55/55 tests;
+  live: search drift -> installed true; search video -> Drift included;
+  lesson: a failed test build left a stale release binary that masked the fix.
 - Incident: subagent delegation broken this session (gentle-pi SessionWorktreeRegistry
   cached wrong-clone identity; HOME is a git repo). Root cause saved to Engram
   (gentle-pi/delegation-worktree-registry-defect). Fix: relaunch pi from project cwd.

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::model::{App, ManagerError, ManagerKind};
-use crate::provider::Provider;
+use crate::provider::{app_matches_query, merge_installed_and_catalog, query_tokens, Provider};
 use crate::shell;
 
 pub struct Pacman;
@@ -176,23 +176,42 @@ impl Provider for Pacman {
     }
 
     fn search(&self, query: &str) -> Result<Vec<App>, ManagerError> {
+        let tokens = query_tokens(query);
+        if tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+        let local: Vec<(String, String)> = parse_query_list(
+            &shell::run("LC_ALL=C pacman -Q 2>/dev/null || true").unwrap_or_default(),
+        );
+        let installed: HashSet<String> = local.iter().map(|(name, _)| name.clone()).collect();
+        // Locally installed packages (including AUR builds absent from the
+        // sync database) match by name; descriptions are fetched only for
+        // the matched few.
+        let matched: Vec<&(String, String)> = local
+            .iter()
+            .filter(|(name, _)| app_matches_query(name, None, &tokens))
+            .collect();
+        let matched_names: Vec<&str> = matched.iter().map(|(name, _)| name.as_str()).collect();
+        let descriptions = description_map(&matched_names);
+        let bins = binary_map();
+        let installed_apps: Vec<App> = matched
+            .iter()
+            .map(|(name, version)| App {
+                usage: bins.get(name).cloned(),
+                install: Some(format!("sudo pacman -S {name}")),
+                name: (*name).clone(),
+                manager: ManagerKind::Pacman,
+                installed: true,
+                version: Some(version.clone()),
+                description: descriptions.get(name).cloned(),
+            })
+            .collect();
         let cmd = format!(
             "LC_ALL=C pacman -Ss {} 2>/dev/null || true",
             shell::quote(query)
         );
         let output = shell::run_managed(ManagerKind::Pacman, &cmd)?;
-        let hits = parse_sync_search(&output);
-        if hits.is_empty() {
-            return Ok(Vec::new());
-        }
-        let installed: HashSet<String> = parse_query_list(
-            &shell::run("LC_ALL=C pacman -Q 2>/dev/null || true").unwrap_or_default(),
-        )
-        .into_iter()
-        .map(|(name, _)| name)
-        .collect();
-        let bins = binary_map();
-        Ok(hits
+        let catalog: Vec<App> = parse_sync_search(&output)
             .into_iter()
             .map(|hit| {
                 // `[installed]` in -Ss output is authoritative when present;
@@ -208,7 +227,8 @@ impl Provider for Pacman {
                     description: hit.description,
                 }
             })
-            .collect())
+            .collect();
+        Ok(merge_installed_and_catalog(installed_apps, catalog))
     }
 }
 
