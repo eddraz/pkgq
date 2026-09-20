@@ -15,9 +15,12 @@ pkgq outdated [--manager m1,m2] [--compact]
 
 - `list` — every application currently installed on the system.
 - `search` — the **union** of the installed inventory and each manager's
-  catalog results, matched with AND semantics over whitespace-separated
-  tokens (case-insensitive, substrings count). Installed apps are found even
-  when a manager's remote search does not surface them.
+  catalog results. Whitespace-separated tokens are scored, not hard-filtered:
+  every token hit adds relevance (name outweighs description, whole-word
+  hits outweigh substrings, a phrase inside the name outranks everything),
+  zero-score results are dropped and `search` orders best-match first.
+  Installed apps are found even when a manager's remote search does not
+  surface them.
 - With `--installed-only` the search takes a **fast path**: only the local
   inventories are consulted (no remote catalog queries), so it works offline.
   In that mode installed debs are attributed to `dpkg` (the installed-package
