@@ -1,7 +1,7 @@
 //! Orchestration: run the selected providers and shape the JSON output.
 
 use crate::model::{App, ManagerError, ManagerKind, Output};
-use crate::provider::{detect_available, registry};
+use crate::provider::{app_matches_query, detect_available, query_tokens, registry};
 use crate::timefmt;
 
 /// Post-search filters for the `search` command.
@@ -69,6 +69,25 @@ pub fn run_outdated_over(
     }
 }
 
+/// De-duplicate the deb world: an installed deb reported by both dpkg and apt
+/// stays attributed to dpkg (the source of truth for what is installed);
+/// catalog-only apt hits are unaffected.
+pub(crate) fn dedup_deb_duplicates(results: &mut Vec<App>) {
+    let dpkg_names: Vec<String> = results
+        .iter()
+        .filter(|app| app.manager == ManagerKind::Dpkg)
+        .map(|app| app.name.clone())
+        .collect();
+    if dpkg_names.is_empty() {
+        return;
+    }
+    results.retain(|app| {
+        !(app.manager == ManagerKind::Apt
+            && app.installed
+            && dpkg_names.iter().any(|name| *name == app.name))
+    });
+}
+
 /// Shared pipeline, taking the registry as a parameter for testability.
 pub fn run_over(
     reg: &[Box<dyn crate::provider::Provider>],
@@ -94,9 +113,22 @@ pub fn run_over(
             }
         }
         managers_detected.push(kind);
-        let outcome = match query {
-            Some(q) => provider.search(q),
-            None => provider.list_installed(),
+        let outcome = match (query, filters.installed_only) {
+            // Fast path: --installed-only never touches remote catalogs; the
+            // local inventories are matched directly, so the command works
+            // offline and returns instantly.
+            (Some(query), true) => {
+                let tokens = query_tokens(query);
+                provider.list_installed().map(|apps| {
+                    apps.into_iter()
+                        .filter(|app| {
+                            app_matches_query(&app.name, app.description.as_deref(), &tokens)
+                        })
+                        .collect::<Vec<_>>()
+                })
+            }
+            (Some(query), false) => provider.search(query),
+            (None, _) => provider.list_installed(),
         };
         match outcome {
             Ok(mut apps) => results.append(&mut apps),
@@ -104,6 +136,7 @@ pub fn run_over(
         }
     }
 
+    dedup_deb_duplicates(&mut results);
     if filters.installed_only {
         results.retain(|app| app.installed);
     }
@@ -241,11 +274,13 @@ mod tests {
 
     #[test]
     fn search_filters_apply_on_installed_flag() {
+        // With --installed-only the fast path matches the local inventories
+        // directly; the installed fixture app is named `zzz`.
         let reg = fixtures();
         let installed = run_over(
             &reg,
             "search",
-            Some("q"),
+            Some("zz"),
             None,
             SearchFilters {
                 installed_only: true,
@@ -255,10 +290,12 @@ mod tests {
         assert_eq!(installed.count, 1);
         assert!(installed.results.iter().all(|a| a.installed));
 
+        // --available-only keeps consulting the catalogs, so both fixture
+        // apps from the available snap provider match the query token.
         let available = run_over(
             &reg,
             "search",
-            Some("q"),
+            Some("snap"),
             None,
             SearchFilters {
                 installed_only: false,
@@ -280,5 +317,79 @@ mod tests {
         assert_eq!(out.count, 0);
         assert_eq!(out.generated_at.len(), 20);
         assert!(out.generated_at.ends_with('Z'));
+    }
+
+    /// Provider that returns a marker app from its catalog search, so tests
+    /// can prove the catalog was never consulted.
+    struct SpyProvider {
+        installed: Vec<App>,
+    }
+
+    impl Provider for SpyProvider {
+        fn kind(&self) -> ManagerKind {
+            ManagerKind::Flatpak
+        }
+        fn is_available(&self) -> bool {
+            true
+        }
+        fn list_installed(&self) -> Result<Vec<App>, ManagerError> {
+            Ok(self.installed.clone())
+        }
+        fn search(&self, _query: &str) -> Result<Vec<App>, ManagerError> {
+            Ok(vec![app("FROM-CATALOG", ManagerKind::Flatpak, false)])
+        }
+    }
+
+    #[test]
+    fn installed_only_fast_path_skips_catalog_search() {
+        let mut drift = app("Drift", ManagerKind::Flatpak, true);
+        drift.description = Some("Edit and export videos easily".into());
+        let remote_only = app("Openshot", ManagerKind::Flatpak, false);
+        let reg: Vec<Box<dyn Provider>> = vec![Box::new(SpyProvider {
+            installed: vec![drift, remote_only],
+        })];
+
+        let out = run_over(
+            &reg,
+            "search",
+            Some("video"),
+            None,
+            SearchFilters {
+                installed_only: true,
+                available_only: false,
+            },
+        );
+        assert_eq!(out.count, 1);
+        assert_eq!(out.results[0].name, "Drift");
+        assert!(out.results[0].installed);
+        // The remote catalog was never consulted.
+        assert!(out.results.iter().all(|a| a.name != "FROM-CATALOG"));
+    }
+
+    #[test]
+    fn deb_duplicates_across_apt_and_dpkg_keep_dpkg() {
+        let reg: Vec<Box<dyn Provider>> = vec![
+            Box::new(FakeProvider {
+                kind: ManagerKind::Dpkg,
+                available: true,
+                apps: vec![app("curl", ManagerKind::Dpkg, true)],
+                fail: false,
+            }),
+            Box::new(FakeProvider {
+                kind: ManagerKind::Apt,
+                available: true,
+                apps: vec![
+                    app("curl", ManagerKind::Apt, true),
+                    app("curlpp", ManagerKind::Apt, false),
+                ],
+                fail: false,
+            }),
+        ];
+        let out = run_over(&reg, "search", Some("curl"), None, SearchFilters::default());
+        let curls: Vec<&App> = out.results.iter().filter(|a| a.name == "curl").collect();
+        assert_eq!(curls.len(), 1);
+        assert_eq!(curls[0].manager, ManagerKind::Dpkg);
+        // Catalog-only apt hits survive.
+        assert!(out.results.iter().any(|a| a.name == "curlpp"));
     }
 }

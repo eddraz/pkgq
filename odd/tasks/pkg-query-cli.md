@@ -81,6 +81,8 @@ bash-cli search <query> [--manager m1,m2] [--compact] [--installed-only] [--avai
 - [x] T7: identity/origin/metadata fields + size split — commit pending
 - [x] T8: outdated command — in progress
 
+- [x] T9: --installed-only fast path (offline) + apt/dpkg dedup — in progress
+
 ## Evidence log
 
 - T1: commit 2b29fcf — 25/25 tests, fmt clean.

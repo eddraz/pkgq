@@ -18,6 +18,13 @@ bash-cli outdated [--manager m1,m2] [--compact]
   catalog results, matched with AND semantics over whitespace-separated
   tokens (case-insensitive, substrings count). Installed apps are found even
   when a manager's remote search does not surface them.
+- With `--installed-only` the search takes a **fast path**: only the local
+  inventories are consulted (no remote catalog queries), so it works offline.
+  In that mode installed debs are attributed to `dpkg` (the installed-package
+  source of truth), so `--manager apt --installed-only` yields nothing — use
+  `--manager dpkg` or omit `--manager`.
+- In normal searches an installed deb reported by both `dpkg` and `apt` is
+  deduplicated and stays attributed to `dpkg`.
 - `outdated` — installed applications with a newer version available.
   `version` keeps the installed one and `available_version` carries the
   candidate. Covers installed applications only (flatpak runtimes and
