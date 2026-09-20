@@ -35,7 +35,7 @@ jobs:
 
       # Network commands (search/outdated) are user-triggered only; CI keeps
       # to the local inventory smoke so runs stay fast and deterministic.
-      - name: Smoke: inventory detects the platform package manager
+      - name: "Smoke: inventory detects the platform package manager"
         run: |
           ./target/release/pkgq list --compact > inventory.json
           jq -e '.count > 0' inventory.json
@@ -72,7 +72,7 @@ jobs:
       - name: Unit tests
         run: cargo test
 
-      - name: Smoke: inventory detects the platform package manager
+      - name: "Smoke: inventory detects the platform package manager"
         run: |
           ./target/release/pkgq list --compact > inventory.json
           jq -e '.count > 0' inventory.json
