@@ -43,7 +43,34 @@ pub(crate) fn parse_search_output(output: &str) -> Vec<String> {
 }
 
 /// Description and stable version per name from batched `brew info --json=v2`.
-pub(crate) fn info_map(names: &[&str]) -> HashMap<String, (Option<String>, Option<String>)> {
+/// Description, version and metadata for one formula/cask.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct BrewInfo {
+    pub description: Option<String>,
+    pub version: Option<String>,
+    pub homepage: Option<String>,
+    pub license: Option<String>,
+    pub origin: Option<String>,
+    pub depends: Option<String>,
+}
+
+/// Brew licenses are either a string or an array of strings.
+fn license_field(value: Option<&serde_json::Value>) -> Option<String> {
+    match value? {
+        serde_json::Value::String(text) => Some(text.clone()),
+        serde_json::Value::Array(items) => {
+            let joined = items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            (!joined.is_empty()).then_some(joined)
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn info_map(names: &[&str]) -> HashMap<String, BrewInfo> {
     if names.is_empty() {
         return HashMap::new();
     }
@@ -68,16 +95,37 @@ pub(crate) fn info_map(names: &[&str]) -> HashMap<String, (Option<String>, Optio
         let Some(name) = entry.get("name").and_then(serde_json::Value::as_str) else {
             continue;
         };
-        let desc = entry
-            .get("desc")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string);
-        let version = entry
-            .pointer("/versions/stable")
-            .and_then(serde_json::Value::as_str)
-            .or_else(|| entry.get("version").and_then(serde_json::Value::as_str))
-            .map(str::to_string);
-        map.insert(name.to_string(), (desc, version));
+        let info = BrewInfo {
+            description: entry
+                .get("desc")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            version: entry
+                .pointer("/versions/stable")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| entry.get("version").and_then(serde_json::Value::as_str))
+                .map(str::to_string),
+            homepage: entry
+                .get("homepage")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            license: license_field(entry.get("license")),
+            origin: entry
+                .get("tap")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            depends: entry
+                .get("dependencies")
+                .and_then(serde_json::Value::as_array)
+                .map(|deps| {
+                    deps.iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .filter(|joined| !joined.is_empty()),
+        };
+        map.insert(name.to_string(), info);
     }
     map
 }
@@ -92,19 +140,29 @@ pub(crate) fn installed_pairs() -> Result<Vec<(String, String)>, ManagerError> {
 fn to_app(
     name: &str,
     version: &str,
-    description: Option<String>,
+    info: Option<&BrewInfo>,
     installed: bool,
-    size_bytes: Option<u64>,
+    installed_bytes: Option<u64>,
 ) -> App {
+    let brew_info = info.cloned().unwrap_or_default();
     App {
         usage: Some(name.to_string()),
         install: Some(format!("brew install {name}")),
-        size_bytes,
+        installed_bytes,
+        download_bytes: None,
+        homepage: brew_info.homepage,
+        license: brew_info.license,
+        origin: brew_info.origin,
+        arch: None,
+        maintainer: None,
+        section: None,
+        depends: brew_info.depends,
+        install_date: None,
         name: name.to_string(),
         manager: ManagerKind::Brew,
         installed,
         version: (!version.is_empty()).then(|| version.to_string()),
-        description,
+        description: brew_info.description,
     }
 }
 
@@ -151,8 +209,8 @@ impl Provider for Brew {
         Ok(pairs
             .iter()
             .map(|(name, version)| {
-                let description = info.get(name).and_then(|(desc, _)| desc.clone());
-                to_app(name, version, description, true, sizes.get(name).copied())
+                let brew_info = info.get(name);
+                to_app(name, version, brew_info, true, sizes.get(name).copied())
             })
             .collect())
     }
@@ -175,10 +233,10 @@ impl Provider for Brew {
         let installed_apps: Vec<App> = matched
             .iter()
             .map(|name| {
-                let description = matched_info.get(name).and_then(|(desc, _)| desc.clone());
+                let brew_info = matched_info.get(name);
                 let size = sizes.get(name).copied();
                 let version = installed.get(name).cloned().unwrap_or_default();
-                to_app(name, &version, description, true, size)
+                to_app(name, &version, brew_info, true, size)
             })
             .collect();
         let cmd = format!(
@@ -192,17 +250,16 @@ impl Provider for Brew {
         let catalog: Vec<App> = names
             .iter()
             .map(|name| {
-                let (description, catalog_version) =
-                    info.get(name).cloned().unwrap_or((None, None));
+                let brew_info = info.get(name).cloned().unwrap_or_default();
                 let is_installed = installed.contains_key(name);
                 let version = if is_installed {
                     installed.get(name).cloned()
                 } else {
                     None
                 }
-                .or(catalog_version)
+                .or(brew_info.version.clone())
                 .unwrap_or_default();
-                to_app(name, &version, description, is_installed, None)
+                to_app(name, &version, Some(&brew_info), is_installed, None)
             })
             .collect();
         Ok(merge_installed_and_catalog(installed_apps, catalog))

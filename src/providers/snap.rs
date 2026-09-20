@@ -88,18 +88,23 @@ pub(crate) fn details_map(names: &[&str]) -> HashMap<String, SnapDetails> {
         .collect::<Vec<_>>()
         .join(" ");
     let cmd = format!(
-        "for s in {list}; do echo \"== $s\"; info=$(LC_ALL=C snap info \"$s\" 2>/dev/null); echo \"S: $(echo \"$info\" | sed -n 's/^summary:[[:space:]]*//p')\"; echo \"I: $(echo \"$info\" | sed -n 's/^installed-size:[[:space:]]*//p')\"; echo \"D: $(echo \"$info\" | grep -oE '[0-9]+([.][0-9]+)? ?[kKMGTPE]?B' | head -n 1)\"; done"
+        "for s in {list}; do echo \"== $s\"; info=$(LC_ALL=C snap info \"$s\" 2>/dev/null); echo \"S: $(echo \"$info\" | sed -n 's/^summary:[[:space:]]*//p')\"; echo \"I: $(echo \"$info\" | sed -n 's/^installed-size:[[:space:]]*//p')\"; echo \"D: $(echo \"$info\" | grep -oE '[0-9]+([.][0-9]+)? ?[kKMGTPE]?B' | head -n 1)\"; echo \"L: $(echo \"$info\" | sed -n 's/^license:[[:space:]]*//p')\"; echo \"P: $(echo \"$info\" | sed -n 's/^publisher:[[:space:]]*//p')\"; echo \"W: $(echo \"$info\" | sed -n 's/^store-url:[[:space:]]*//p')\"; done"
     );
     let output = shell::run(&cmd).unwrap_or_default();
     parse_details_output(&output)
 }
 
-/// Summary and size for one snap. Size prefers the `installed-size` field
-/// and falls back to the stable-channel download size.
+/// Summary and sizes for one snap. `installed_bytes` comes from the
+/// `installed-size` field (present on installed snaps); `download_bytes`
+/// from the stable-channel listing.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SnapDetails {
     pub summary: Option<String>,
-    pub size_bytes: Option<u64>,
+    pub installed_bytes: Option<u64>,
+    pub download_bytes: Option<u64>,
+    pub license: Option<String>,
+    pub origin: Option<String>,
+    pub homepage: Option<String>,
 }
 
 /// Parse the `== name` / `S:` / `I:` / `D:` blocks produced by [`details_map`].
@@ -119,6 +124,21 @@ pub(crate) fn parse_details_output(output: &str) -> HashMap<String, SnapDetails>
                 if !summary.is_empty() {
                     entry.summary = Some(summary.to_string());
                 }
+            } else if let Some(license) = line.strip_prefix("L: ") {
+                let license = license.trim();
+                if !license.is_empty() {
+                    entry.license = Some(license.to_string());
+                }
+            } else if let Some(publisher) = line.strip_prefix("P: ") {
+                let publisher = publisher.trim();
+                if !publisher.is_empty() {
+                    entry.origin = Some(publisher.to_string());
+                }
+            } else if let Some(website) = line.strip_prefix("W: ") {
+                let website = website.trim();
+                if !website.is_empty() {
+                    entry.homepage = Some(website.to_string());
+                }
             } else if let Some(installed) = line.strip_prefix("I: ") {
                 let installed = installed.trim();
                 let parsed = installed
@@ -126,12 +146,10 @@ pub(crate) fn parse_details_output(output: &str) -> HashMap<String, SnapDetails>
                     .ok()
                     .or_else(|| parse_human_size(installed));
                 if parsed.is_some() {
-                    entry.size_bytes = parsed;
+                    entry.installed_bytes = parsed;
                 }
             } else if let Some(download) = line.strip_prefix("D: ") {
-                if entry.size_bytes.is_none() {
-                    entry.size_bytes = parse_human_size(download.trim());
-                }
+                entry.download_bytes = parse_human_size(download.trim());
             }
         }
     }
@@ -154,7 +172,16 @@ impl Provider for Snap {
                 App {
                     usage: Some(name.clone()),
                     install: Some(format!("sudo snap install {name}")),
-                    size_bytes: snap_details.and_then(|d| d.size_bytes),
+                    installed_bytes: snap_details.and_then(|d| d.installed_bytes),
+                    download_bytes: None,
+                    homepage: snap_details.and_then(|d| d.homepage.clone()),
+                    license: snap_details.and_then(|d| d.license.clone()),
+                    origin: snap_details.and_then(|d| d.origin.clone()),
+                    arch: None,
+                    maintainer: snap_details.and_then(|d| d.origin.clone()),
+                    section: None,
+                    depends: None,
+                    install_date: None,
                     name: name.clone(),
                     manager: ManagerKind::Snap,
                     installed: true,
@@ -194,7 +221,16 @@ impl Provider for Snap {
                 App {
                     usage: Some(name.clone()),
                     install: Some(format!("sudo snap install {name}")),
-                    size_bytes: snap_details.and_then(|d| d.size_bytes),
+                    installed_bytes: snap_details.and_then(|d| d.installed_bytes),
+                    download_bytes: snap_details.and_then(|d| d.download_bytes),
+                    homepage: snap_details.and_then(|d| d.homepage.clone()),
+                    license: snap_details.and_then(|d| d.license.clone()),
+                    origin: snap_details.and_then(|d| d.origin.clone()),
+                    arch: None,
+                    maintainer: snap_details.and_then(|d| d.origin.clone()),
+                    section: None,
+                    depends: None,
+                    install_date: None,
                     name: name.clone(),
                     manager: ManagerKind::Snap,
                     installed: true,
@@ -215,7 +251,16 @@ impl Provider for Snap {
                 App {
                     usage: Some(name.clone()),
                     install: Some(format!("sudo snap install {name}")),
-                    size_bytes: None,
+                    installed_bytes: None,
+                    download_bytes: None,
+                    homepage: None,
+                    license: None,
+                    origin: None,
+                    arch: None,
+                    maintainer: None,
+                    section: None,
+                    depends: None,
+                    install_date: None,
                     name,
                     manager: ManagerKind::Snap,
                     installed: is_installed,
@@ -291,6 +336,9 @@ mod tests {
             "S: Snap runtime environment\n",
             "I: 76543210\n",
             "D: 77MB\n",
+            "L: Other Open Source\n",
+            "P: Canonical**\n",
+            "W: https://snapcraft.io/core22\n",
             "== firefox\n",
             "S: Browser\n",
             "D: 218MB\n",
@@ -298,10 +346,19 @@ mod tests {
         let map = parse_details_output(fixture);
         let core = map.get("core22").unwrap();
         assert_eq!(core.summary.as_deref(), Some("Snap runtime environment"));
-        // installed-size wins over the channel download size.
-        assert_eq!(core.size_bytes, Some(76_543_210));
+        // installed-size and channel download size are now separate fields.
+        assert_eq!(core.installed_bytes, Some(76_543_210));
+        assert_eq!(core.download_bytes, Some(77_000_000));
+        assert_eq!(core.license.as_deref(), Some("Other Open Source"));
+        assert_eq!(core.origin.as_deref(), Some("Canonical**"));
+        assert_eq!(
+            core.homepage.as_deref(),
+            Some("https://snapcraft.io/core22")
+        );
         let firefox = map.get("firefox").unwrap();
-        assert_eq!(firefox.size_bytes, Some(218_000_000));
+        // Without installed-size only the download size is known.
+        assert_eq!(firefox.installed_bytes, None);
+        assert_eq!(firefox.download_bytes, Some(218_000_000));
         assert!(!map.contains_key("missing"));
     }
 }

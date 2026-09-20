@@ -44,7 +44,26 @@ pub struct App {
     pub install: Option<String>,
     /// On-disk installed size when installed, download size when the app is
     /// only available; bytes. Null when the manager does not expose it.
-    pub size_bytes: Option<u64>,
+    pub installed_bytes: Option<u64>,
+    /// Download size when the app is only available; null otherwise.
+    pub download_bytes: Option<u64>,
+    /// Project homepage; null when the manager does not expose it.
+    pub homepage: Option<String>,
+    /// License; null when the manager does not expose it.
+    pub license: Option<String>,
+    /// Repository, remote, tap or channel the app comes from.
+    pub origin: Option<String>,
+    /// Target architecture; null when not exposed or not applicable.
+    pub arch: Option<String>,
+    /// Packager or publisher; null when the manager does not expose it.
+    pub maintainer: Option<String>,
+    /// Package section or group (e.g. `web`, `video`); null when not exposed.
+    pub section: Option<String>,
+    /// Raw dependency list as reported by the manager; null when not exposed.
+    pub depends: Option<String>,
+    /// When the app was installed. RFC3339 when derivable, otherwise the
+    /// manager-reported string; null for available-only apps.
+    pub install_date: Option<String>,
 }
 
 /// Parse human-formatted sizes such as `70.2 MB`, `77MB`, `5.36 MiB`, `512 B`.
@@ -59,8 +78,13 @@ pub(crate) fn parse_human_size(text: &str) -> Option<u64> {
         .find(|c: char| !(c.is_ascii_digit() || c == '.'))
         .unwrap_or(rest.len());
     let number: f64 = rest[..number_end].parse().ok()?;
-    let unit: String = rest[number_end..]
-        .trim_start()
+    // Units may be separated by any non-alphabetic filler (spaces, or a
+    // literal `?` when glib downgrades a narrow no-break space to ASCII),
+    // so skip until the unit letters begin.
+    let unit_start = rest[number_end..]
+        .find(|c: char| c.is_ascii_alphabetic())
+        .unwrap_or(rest.len() - number_end);
+    let unit: String = rest[number_end + unit_start..]
         .chars()
         .take_while(|c| c.is_ascii_alphabetic())
         .collect::<String>()
@@ -129,7 +153,16 @@ mod tests {
             description: None,
             usage: None,
             install: Some("sudo apt install curl".into()),
-            size_bytes: None,
+            installed_bytes: None,
+            download_bytes: None,
+            homepage: None,
+            license: None,
+            origin: None,
+            arch: None,
+            maintainer: None,
+            section: None,
+            depends: None,
+            install_date: None,
         };
         // serde_json::to_value normalizes into a sorted map, so field order
         // must be asserted against the serialized string itself.
@@ -142,7 +175,16 @@ mod tests {
             "\"description\":",
             "\"usage\":",
             "\"install\":",
-            "\"size_bytes\":",
+            "\"installed_bytes\":",
+            "\"download_bytes\":",
+            "\"homepage\":",
+            "\"license\":",
+            "\"origin\":",
+            "\"arch\":",
+            "\"maintainer\":",
+            "\"section\":",
+            "\"depends\":",
+            "\"install_date\":",
         ];
         let mut last = 0;
         for k in keys {
@@ -171,6 +213,8 @@ mod tests {
             Some((5.36 * 1_048_576.0) as u64)
         );
         assert_eq!(parse_human_size("2 GiB"), Some(2 * 1_073_741_824));
+        // glib downgrades the narrow no-break space to `?` in the C locale.
+        assert_eq!(parse_human_size("70.2?MB"), Some(70_200_000));
         assert_eq!(parse_human_size("no size"), None);
         assert_eq!(parse_human_size(""), None);
     }

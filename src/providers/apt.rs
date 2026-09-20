@@ -122,9 +122,8 @@ fn non_none(value: &str) -> Option<String> {
     (!value.is_empty() && value != "(none)").then(|| value.to_string())
 }
 
-/// `(installed_size, download_size)` per package from a batched
-/// `apt-cache show` run; installed sizes are KiB, downloads are bytes.
-pub(crate) fn apt_show_size_map(names: &[&str]) -> HashMap<String, (Option<u64>, Option<u64>)> {
+/// Sizes and metadata per package from a batched `apt-cache show` run.
+pub(crate) fn apt_show_details_map(names: &[&str]) -> HashMap<String, AptShowDetails> {
     if names.is_empty() {
         return HashMap::new();
     }
@@ -135,13 +134,25 @@ pub(crate) fn apt_show_size_map(names: &[&str]) -> HashMap<String, (Option<u64>,
         .join(" ");
     let cmd = format!("LC_ALL=C apt-cache show {args} 2>/dev/null || true");
     let output = shell::run(&cmd).unwrap_or_default();
-    parse_show_size_output(&output)
+    parse_show_details_output(&output)
+}
+
+/// Details parsed from one `apt-cache show` block.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AptShowDetails {
+    pub installed_bytes: Option<u64>,
+    pub download_bytes: Option<u64>,
+    pub homepage: Option<String>,
+    pub arch: Option<String>,
+    pub maintainer: Option<String>,
+    pub section: Option<String>,
+    pub depends: Option<String>,
 }
 
 /// Parse `apt-cache show` blocks: `Package:` starts an entry, `Installed-Size:`
 /// is reported in KiB and `Size:` in bytes; the first block per package wins.
-pub(crate) fn parse_show_size_output(output: &str) -> HashMap<String, (Option<u64>, Option<u64>)> {
-    let mut map: HashMap<String, (Option<u64>, Option<u64>)> = HashMap::new();
+pub(crate) fn parse_show_details_output(output: &str) -> HashMap<String, AptShowDetails> {
+    let mut map: HashMap<String, AptShowDetails> = HashMap::new();
     let mut current: Option<String> = None;
     for line in output.lines() {
         if let Some(name) = line.strip_prefix("Package: ") {
@@ -153,19 +164,40 @@ pub(crate) fn parse_show_size_output(output: &str) -> HashMap<String, (Option<u6
             };
             let trimmed = line.trim();
             if let Some(kib) = trimmed.strip_prefix("Installed-Size: ") {
-                if entry.0.is_none() {
-                    entry.0 = kib.trim().parse::<u64>().ok().map(|k| k * 1024);
+                if entry.installed_bytes.is_none() {
+                    entry.installed_bytes = kib.trim().parse::<u64>().ok().map(|k| k * 1024);
                 }
             } else if let Some(bytes) = trimmed.strip_prefix("Size: ") {
-                if entry.1.is_none() {
-                    entry.1 = bytes.trim().parse::<u64>().ok();
+                if entry.download_bytes.is_none() {
+                    entry.download_bytes = bytes.trim().parse::<u64>().ok();
                 }
+            }
+            let text_field = |prefix: &str| {
+                trimmed
+                    .strip_prefix(prefix)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            };
+            if entry.homepage.is_none() {
+                entry.homepage = text_field("Homepage: ");
+            }
+            if entry.arch.is_none() {
+                entry.arch = text_field("Architecture: ");
+            }
+            if entry.maintainer.is_none() {
+                entry.maintainer = text_field("Maintainer: ");
+            }
+            if entry.section.is_none() {
+                entry.section = text_field("Section: ");
+            }
+            if entry.depends.is_none() {
+                entry.depends = text_field("Depends: ");
             }
         }
     }
     map
 }
-
 impl Provider for Apt {
     fn kind(&self) -> ManagerKind {
         ManagerKind::Apt
@@ -190,7 +222,7 @@ impl Provider for Apt {
         let names: Vec<&str> = hits.iter().map(|(name, _)| name.as_str()).collect();
         let status = deb_status_map(&names);
         let policy = apt_policy_map(&names);
-        let sizes = apt_show_size_map(&names);
+        let show = apt_show_details_map(&names);
         let bins = dpkg::binary_map();
 
         Ok(hits
@@ -206,20 +238,30 @@ impl Provider for Apt {
                 };
                 // Installed apps report their on-disk size, available ones the
                 // download size of the .deb.
-                let size_bytes = sizes
-                    .get(&name)
-                    .map(|(installed_size, download_size)| {
-                        if installed {
-                            *installed_size
-                        } else {
-                            *download_size
-                        }
-                    })
-                    .flatten();
+                let show_details = show.get(&name);
+                let installed_bytes = if installed {
+                    show_details.and_then(|d| d.installed_bytes)
+                } else {
+                    None
+                };
+                let download_bytes = if installed {
+                    None
+                } else {
+                    show_details.and_then(|d| d.download_bytes)
+                };
                 App {
                     usage: installed.then(|| bins.get(&name).cloned()).flatten(),
                     install: Some(format!("sudo apt install {name}")),
-                    size_bytes,
+                    installed_bytes,
+                    download_bytes,
+                    homepage: show_details.and_then(|d| d.homepage.clone()),
+                    license: None,
+                    origin: None,
+                    arch: show_details.and_then(|d| d.arch.clone()),
+                    maintainer: show_details.and_then(|d| d.maintainer.clone()),
+                    section: show_details.and_then(|d| d.section.clone()),
+                    depends: show_details.and_then(|d| d.depends.clone()),
+                    install_date: None,
                     name,
                     manager: ManagerKind::Apt,
                     installed,
@@ -299,10 +341,10 @@ mod tests {
 
     #[test]
     fn parses_show_sizes_keeping_first_block() {
-        let map = parse_show_size_output(SHOW_FIXTURE);
-        let (installed, download) = map.get("curl").copied().unwrap();
-        assert_eq!(installed, Some(518 * 1024));
-        assert_eq!(download, Some(289096));
+        let map = parse_show_details_output(SHOW_FIXTURE);
+        let curl = map.get("curl").unwrap();
+        assert_eq!(curl.installed_bytes, Some(518 * 1024));
+        assert_eq!(curl.download_bytes, Some(289096));
     }
 
     #[test]

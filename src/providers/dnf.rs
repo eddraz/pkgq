@@ -15,16 +15,23 @@ pub(crate) struct RpmRow {
     pub name: String,
     pub version: String,
     pub description: Option<String>,
-    pub size_bytes: Option<u64>,
+    pub installed_bytes: Option<u64>,
+    pub homepage: Option<String>,
+    pub license: Option<String>,
+    pub origin: Option<String>,
+    pub arch: Option<String>,
+    pub maintainer: Option<String>,
+    pub section: Option<String>,
+    pub install_date: Option<String>,
 }
 
-/// Parse `rpm -qa --qf '%{NAME}\t%{VERSION}-%{RELEASE}\t%{SUMMARY}\t%{SIZE}\n'`
-/// output (`SIZE` is bytes).
+/// Parse `rpm -qa` output; `SIZE` is bytes and `INSTALLTIME` an epoch that is
+/// normalized to RFC3339.
 pub(crate) fn parse_rpm_qa(output: &str) -> Vec<RpmRow> {
     output
         .lines()
         .filter_map(|line| {
-            let mut parts = line.splitn(4, '\t');
+            let mut parts = line.splitn(11, '\t');
             let name = parts.next()?.trim();
             if name.is_empty() {
                 return None;
@@ -35,12 +42,36 @@ pub(crate) fn parse_rpm_qa(output: &str) -> Vec<RpmRow> {
                 .map(str::trim)
                 .filter(|d| !d.is_empty() && *d != "(none)")
                 .map(str::to_string);
-            let size_bytes = parts.next().and_then(|s| s.trim().parse::<u64>().ok());
+            let installed_bytes = parts.next().and_then(|s| s.trim().parse::<u64>().ok());
+            let field = |parts: &mut std::str::SplitN<'_, char>| {
+                parts
+                    .next()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty() && *value != "(none)")
+                    .map(str::to_string)
+            };
+            let homepage = field(&mut parts);
+            let license = field(&mut parts);
+            let origin = field(&mut parts);
+            let arch = field(&mut parts);
+            let maintainer = field(&mut parts);
+            let section = field(&mut parts);
+            let install_date = parts
+                .next()
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .map(crate::timefmt::format_rfc3339);
             Some(RpmRow {
                 name: name.to_string(),
                 version: version.to_string(),
                 description,
-                size_bytes,
+                installed_bytes,
+                homepage,
+                license,
+                origin,
+                arch,
+                maintainer,
+                section,
+                install_date,
             })
         })
         .collect()
@@ -68,7 +99,7 @@ pub(crate) fn parse_dnf_search(output: &str) -> Vec<(String, Option<String>)> {
 
 /// Installed rows through rpm (present on every dnf system), one call.
 pub(crate) fn installed_rows() -> Result<Vec<RpmRow>, ManagerError> {
-    let cmd = "LC_ALL=C rpm -qa --qf '%{NAME}\\t%{VERSION}-%{RELEASE}\\t%{SUMMARY}\\t%{SIZE}\\n' 2>/dev/null";
+    let cmd = "LC_ALL=C rpm -qa --qf '%{NAME}\\t%{VERSION}-%{RELEASE}\\t%{SUMMARY}\\t%{SIZE}\\t%{URL}\\t%{LICENSE}\\t%{VENDOR}\\t%{ARCH}\\t%{PACKAGER}\\t%{GROUP}\\t%{INSTALLTIME}\\n' 2>/dev/null";
     let output = shell::run_managed(ManagerKind::Dnf, cmd)?;
     Ok(parse_rpm_qa(&output))
 }
@@ -115,7 +146,16 @@ impl Provider for Dnf {
                 // usage stays null for the bulk inventory (documented).
                 usage: None,
                 install: Some(format!("sudo dnf install {}", row.name)),
-                size_bytes: row.size_bytes,
+                installed_bytes: row.installed_bytes,
+                download_bytes: None,
+                homepage: row.homepage,
+                license: row.license,
+                origin: row.origin,
+                arch: row.arch,
+                maintainer: row.maintainer,
+                section: row.section,
+                depends: None,
+                install_date: row.install_date,
                 name: row.name,
                 manager: ManagerKind::Dnf,
                 installed: true,
@@ -142,7 +182,16 @@ impl Provider for Dnf {
             .map(|row| App {
                 usage: None,
                 install: Some(format!("sudo dnf install {}", row.name)),
-                size_bytes: row.size_bytes,
+                installed_bytes: row.installed_bytes,
+                download_bytes: None,
+                homepage: row.homepage.clone(),
+                license: row.license.clone(),
+                origin: row.origin.clone(),
+                arch: row.arch.clone(),
+                maintainer: row.maintainer.clone(),
+                section: row.section.clone(),
+                depends: None,
+                install_date: row.install_date.clone(),
                 name: row.name.clone(),
                 manager: ManagerKind::Dnf,
                 installed: true,
@@ -170,7 +219,16 @@ impl Provider for Dnf {
                 App {
                     usage: bins.get(&name).cloned(),
                     install: Some(format!("sudo dnf install {name}")),
-                    size_bytes: None,
+                    installed_bytes: None,
+                    download_bytes: None,
+                    homepage: None,
+                    license: None,
+                    origin: None,
+                    arch: None,
+                    maintainer: None,
+                    section: None,
+                    depends: None,
+                    install_date: None,
                     name,
                     manager: ManagerKind::Dnf,
                     installed,
@@ -188,9 +246,9 @@ mod tests {
     use super::*;
 
     const RPM_QA_FIXTURE: &str = concat!(
-        "curl\t8.14.1-2.fc41\tA tool for transferring data from/to a network server\n",
-        "glibc\t2.40-17.fc41\tGNU C Library\n",
-        "mystery\t1.0-1\t(none)\n",
+        "curl\t8.14.1-2.fc41\tA tool for transferring data from/to a network server\t1500000\thttps://curl.se\tMIT\tFedora Project\tx86_64\tFedora Project\tApplications/Internet\t1738000000\n",
+        "glibc\t2.40-17.fc41\tGNU C Library\t12000000\t\t\tFedora Project\tx86_64\t\t\t1738000000\n",
+        "mystery\t1.0-1\t(none)\t\t\t\t\t\t\t\t\n",
     );
 
     const SEARCH_FIXTURE: &str = concat!(
@@ -206,7 +264,22 @@ mod tests {
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].name, "curl");
         assert_eq!(rows[0].version, "8.14.1-2.fc41");
+        assert_eq!(rows[0].installed_bytes, Some(1_500_000));
+        assert_eq!(rows[0].homepage.as_deref(), Some("https://curl.se"));
+        assert_eq!(rows[0].license.as_deref(), Some("MIT"));
+        assert_eq!(rows[0].origin.as_deref(), Some("Fedora Project"));
+        assert_eq!(rows[0].arch.as_deref(), Some("x86_64"));
+        assert_eq!(rows[0].section.as_deref(), Some("Applications/Internet"));
+        // INSTALLTIME epoch is normalized to RFC3339.
+        assert_eq!(
+            rows[0].install_date.as_deref(),
+            Some(crate::timefmt::format_rfc3339(1_738_000_000).as_str())
+        );
+        // Empty and (none) fields parse as None.
+        assert_eq!(rows[1].homepage, None);
+        assert_eq!(rows[1].maintainer, None);
         assert_eq!(rows[2].description, None);
+        assert_eq!(rows[2].installed_bytes, None);
     }
 
     #[test]

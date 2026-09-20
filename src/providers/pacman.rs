@@ -29,6 +29,7 @@ pub(crate) fn parse_query_list(output: &str) -> Vec<(String, String)> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SyncHit {
     pub name: String,
+    pub repo: String,
     pub version: String,
     pub installed: bool,
     pub description: Option<String>,
@@ -50,7 +51,7 @@ pub(crate) fn parse_sync_search(output: &str) -> Vec<SyncHit> {
         let Some((qualified, rest)) = line.split_once(' ') else {
             continue;
         };
-        let Some((_, name)) = qualified.split_once('/') else {
+        let Some((repo, name)) = qualified.split_once('/') else {
             continue;
         };
         let rest = rest.trim();
@@ -65,6 +66,7 @@ pub(crate) fn parse_sync_search(output: &str) -> Vec<SyncHit> {
         };
         hits.push(SyncHit {
             name: name.to_string(),
+            repo: repo.to_string(),
             version: version.to_string(),
             installed,
             description: None,
@@ -73,7 +75,7 @@ pub(crate) fn parse_sync_search(output: &str) -> Vec<SyncHit> {
     hits
 }
 
-/// Short description per installed package, batched through one bash loop of
+/// Metadata per installed package, batched through one bash loop of
 /// `pacman -Qi` calls.
 pub(crate) fn details_map(names: &[&str]) -> HashMap<String, PacmanDetails> {
     if names.is_empty() {
@@ -85,21 +87,26 @@ pub(crate) fn details_map(names: &[&str]) -> HashMap<String, PacmanDetails> {
         .collect::<Vec<_>>()
         .join(" ");
     let cmd = format!(
-        "for p in {list}; do echo \"== $p\"; LC_ALL=C pacman -Qi \"$p\" 2>/dev/null | sed -n 's/^Description[[:space:]]*:[[:space:]]*//p; s/^Installed Size[[:space:]]*:[[:space:]]*//p'; done"
+        "for p in {list}; do echo \"== $p\"; info=$(LC_ALL=C pacman -Qi \"$p\" 2>/dev/null); echo \"D: $(echo \"$info\" | sed -n 's/^Description[[:space:]]*:[[:space:]]*//p')\"; echo \"S: $(echo \"$info\" | sed -n 's/^Installed Size[[:space:]]*:[[:space:]]*//p')\"; echo \"H: $(echo \"$info\" | sed -n 's/^URL[[:space:]]*:[[:space:]]*//p')\"; echo \"L: $(echo \"$info\" | sed -n 's/^Licenses[[:space:]]*:[[:space:]]*//p')\"; echo \"R: $(echo \"$info\" | sed -n 's/^Repository[[:space:]]*:[[:space:]]*//p')\"; echo \"A: $(echo \"$info\" | sed -n 's/^Architecture[[:space:]]*:[[:space:]]*//p')\"; echo \"P: $(echo \"$info\" | sed -n 's/^Packager[[:space:]]*:[[:space:]]*//p')\"; echo \"T: $(echo \"$info\" | sed -n 's/^Install Date[[:space:]]*:[[:space:]]*//p')\"; done"
     );
     let output = shell::run(&cmd).unwrap_or_default();
     parse_details_output(&output)
 }
 
-/// Description plus on-disk installed size for one package.
+/// Description, installed size and metadata for one package.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PacmanDetails {
     pub description: Option<String>,
-    pub size_bytes: Option<u64>,
+    pub installed_bytes: Option<u64>,
+    pub homepage: Option<String>,
+    pub license: Option<String>,
+    pub origin: Option<String>,
+    pub arch: Option<String>,
+    pub maintainer: Option<String>,
+    pub install_date: Option<String>,
 }
 
-/// Parse `== name` blocks whose first value line is the description and whose
-/// second is the human-formatted installed size (`5.36 MiB`).
+/// Parse the `== name` / tagged-line blocks produced by [`details_map`].
 pub(crate) fn parse_details_output(output: &str) -> HashMap<String, PacmanDetails> {
     let mut map: HashMap<String, PacmanDetails> = HashMap::new();
     let mut current: Option<String> = None;
@@ -111,15 +118,43 @@ pub(crate) fn parse_details_output(output: &str) -> HashMap<String, PacmanDetail
             let Some(entry) = map.get_mut(&name) else {
                 continue;
             };
-            let value = line.trim();
-            if value.is_empty() {
-                continue;
-            }
-            if entry.description.is_none() {
-                entry.description = Some(value.to_string());
-            } else if entry.size_bytes.is_none() {
-                entry.size_bytes = parse_human_size(value);
-                current = None;
+            if let Some(value) = line.strip_prefix("D: ") {
+                let value = value.trim();
+                if !value.is_empty() {
+                    entry.description = Some(value.to_string());
+                }
+            } else if let Some(size) = line.strip_prefix("S: ") {
+                entry.installed_bytes = parse_human_size(size.trim());
+            } else if let Some(homepage) = line.strip_prefix("H: ") {
+                let homepage = homepage.trim();
+                if !homepage.is_empty() {
+                    entry.homepage = Some(homepage.to_string());
+                }
+            } else if let Some(license) = line.strip_prefix("L: ") {
+                let license = license.trim();
+                if !license.is_empty() {
+                    entry.license = Some(license.to_string());
+                }
+            } else if let Some(repo) = line.strip_prefix("R: ") {
+                let repo = repo.trim();
+                if !repo.is_empty() {
+                    entry.origin = Some(repo.to_string());
+                }
+            } else if let Some(arch) = line.strip_prefix("A: ") {
+                let arch = arch.trim();
+                if !arch.is_empty() {
+                    entry.arch = Some(arch.to_string());
+                }
+            } else if let Some(packager) = line.strip_prefix("P: ") {
+                let packager = packager.trim();
+                if !packager.is_empty() {
+                    entry.maintainer = Some(packager.to_string());
+                }
+            } else if let Some(date) = line.strip_prefix("T: ") {
+                let date = date.trim();
+                if !date.is_empty() {
+                    entry.install_date = Some(date.to_string());
+                }
             }
         }
     }
@@ -179,16 +214,23 @@ impl Provider for Pacman {
             .map(|(name, version)| {
                 let pkg_details = details.get(&name);
                 let usage = bins.get(&name).cloned();
-                let size_bytes = pkg_details.and_then(|d| d.size_bytes);
-                let description = pkg_details.and_then(|d| d.description.clone());
                 App {
                     install: Some(format!("sudo pacman -S {name}")),
-                    size_bytes,
+                    installed_bytes: pkg_details.and_then(|d| d.installed_bytes),
+                    download_bytes: None,
+                    homepage: pkg_details.and_then(|d| d.homepage.clone()),
+                    license: pkg_details.and_then(|d| d.license.clone()),
+                    origin: pkg_details.and_then(|d| d.origin.clone()),
+                    arch: pkg_details.and_then(|d| d.arch.clone()),
+                    maintainer: pkg_details.and_then(|d| d.maintainer.clone()),
+                    section: None,
+                    depends: None,
+                    install_date: pkg_details.and_then(|d| d.install_date.clone()),
                     name,
                     manager: ManagerKind::Pacman,
                     installed: true,
                     version: Some(version),
-                    description,
+                    description: pkg_details.and_then(|d| d.description.clone()),
                     usage,
                 }
             })
@@ -219,17 +261,24 @@ impl Provider for Pacman {
             .map(|(name, version)| {
                 let pkg_details = details.get(name);
                 let usage = bins.get(name).cloned();
-                let size_bytes = pkg_details.and_then(|d| d.size_bytes);
-                let description = pkg_details.and_then(|d| d.description.clone());
                 App {
                     usage,
                     install: Some(format!("sudo pacman -S {name}")),
-                    size_bytes,
+                    installed_bytes: pkg_details.and_then(|d| d.installed_bytes),
+                    download_bytes: None,
+                    homepage: pkg_details.and_then(|d| d.homepage.clone()),
+                    license: pkg_details.and_then(|d| d.license.clone()),
+                    origin: pkg_details.and_then(|d| d.origin.clone()),
+                    arch: pkg_details.and_then(|d| d.arch.clone()),
+                    maintainer: pkg_details.and_then(|d| d.maintainer.clone()),
+                    section: None,
+                    depends: None,
+                    install_date: pkg_details.and_then(|d| d.install_date.clone()),
                     name: (*name).clone(),
                     manager: ManagerKind::Pacman,
                     installed: true,
                     version: Some(version.clone()),
-                    description,
+                    description: pkg_details.and_then(|d| d.description.clone()),
                 }
             })
             .collect();
@@ -247,7 +296,16 @@ impl Provider for Pacman {
                 App {
                     usage: bins.get(&hit.name).cloned(),
                     install: Some(format!("sudo pacman -S {}", hit.name)),
-                    size_bytes: None,
+                    installed_bytes: None,
+                    download_bytes: None,
+                    homepage: None,
+                    license: None,
+                    origin: (!hit.repo.is_empty()).then_some(hit.repo.clone()),
+                    arch: None,
+                    maintainer: None,
+                    section: None,
+                    depends: None,
+                    install_date: None,
                     name: hit.name,
                     manager: ManagerKind::Pacman,
                     installed,
@@ -292,6 +350,8 @@ mod tests {
         let hits = parse_sync_search(SYNC_FIXTURE);
         assert_eq!(hits.len(), 3);
         assert!(hits[0].installed);
+        assert_eq!(hits[0].repo, "core");
+        assert_eq!(hits[1].repo, "extra");
         assert_eq!(hits[0].version, "8.14.1-2");
         assert_eq!(
             hits[0].description.as_deref(),
