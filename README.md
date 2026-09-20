@@ -1,9 +1,12 @@
 # pkgq
 
+[![CI](https://github.com/eddraz/pkgq/actions/workflows/ci.yml/badge.svg)](https://github.com/eddraz/pkgq/actions/workflows/ci.yml)
+
 Inventory and search OS applications across package managers, outputting JSON.
 Written in Rust; every external command runs exclusively through `bash -c`.
 
-Primary target: Debian Linux. Other managers are supported opportunistically.
+Primary target: Debian Linux. Other managers are supported opportunistically
+(CI matrix verifies Arch/pacman, Fedora/dnf and macOS/brew on every push).
 
 ## Usage
 
