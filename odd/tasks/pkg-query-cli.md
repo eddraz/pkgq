@@ -76,6 +76,8 @@ bash-cli search <query> [--manager m1,m2] [--compact] [--installed-only] [--avai
 
 - [x] T5: search unions installed inventory with catalog results (token matching) — in progress
 
+- [x] T6: size_bytes per app (installed size / download size, null unknown) — in progress
+
 ## Evidence log
 
 - T1: commit 2b29fcf — 25/25 tests, fmt clean.
@@ -91,6 +93,11 @@ bash-cli search <query> [--manager m1,m2] [--compact] [--installed-only] [--avai
   dpkg.search now covers local debs absent from apt cache. 55/55 tests;
   live: search drift -> installed true; search video -> Drift included;
   lesson: a failed test build left a stale release binary that masked the fix.
+- T6: size_bytes added across providers — dpkg Installed-Size (KiB), apt-cache
+  show (installed KiB / download bytes), flatpak list size column (human),
+  snap info installed-size or stable-channel download, brew du -sk over
+  Cellar/Caskroom, rpm %SIZE (bytes); shared parse_human_size (SI vs IEC).
+  Live: 1852/1854 list sizes; curl 530432 B; Drift 63.7 MB.
 - Incident: subagent delegation broken this session (gentle-pi SessionWorktreeRegistry
   cached wrong-clone identity; HOME is a git repo). Root cause saved to Engram
   (gentle-pi/delegation-worktree-registry-defect). Fix: relaunch pi from project cwd.

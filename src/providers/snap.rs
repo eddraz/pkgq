@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use crate::model::{App, ManagerError, ManagerKind};
+use crate::model::{parse_human_size, App, ManagerError, ManagerKind};
 use crate::provider::{app_matches_query, merge_installed_and_catalog, query_tokens, Provider};
 use crate::shell;
 
@@ -78,7 +78,7 @@ pub(crate) fn parse_snap_find(output: &str) -> Vec<(String, String, String)> {
 }
 
 /// Short summary per snap name, batched through a single bash invocation.
-pub(crate) fn summary_map(names: &[&str]) -> HashMap<String, String> {
+pub(crate) fn details_map(names: &[&str]) -> HashMap<String, SnapDetails> {
     if names.is_empty() {
         return HashMap::new();
     }
@@ -88,24 +88,50 @@ pub(crate) fn summary_map(names: &[&str]) -> HashMap<String, String> {
         .collect::<Vec<_>>()
         .join(" ");
     let cmd = format!(
-        "for s in {list}; do echo \"== $s\"; LC_ALL=C snap info \"$s\" 2>/dev/null | sed -n 's/^summary:[[:space:]]*//p'; done"
+        "for s in {list}; do echo \"== $s\"; info=$(LC_ALL=C snap info \"$s\" 2>/dev/null); echo \"S: $(echo \"$info\" | sed -n 's/^summary:[[:space:]]*//p')\"; echo \"I: $(echo \"$info\" | sed -n 's/^installed-size:[[:space:]]*//p')\"; echo \"D: $(echo \"$info\" | grep -oE '[0-9]+([.][0-9]+)? ?[kKMGTPE]?B' | head -n 1)\"; done"
     );
     let output = shell::run(&cmd).unwrap_or_default();
-    parse_summary_output(&output)
+    parse_details_output(&output)
 }
 
-/// Parse the `== name` / summary blocks produced by [`summary_map`].
-pub(crate) fn parse_summary_output(output: &str) -> HashMap<String, String> {
-    let mut map = HashMap::new();
+/// Summary and size for one snap. Size prefers the `installed-size` field
+/// and falls back to the stable-channel download size.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SnapDetails {
+    pub summary: Option<String>,
+    pub size_bytes: Option<u64>,
+}
+
+/// Parse the `== name` / `S:` / `I:` / `D:` blocks produced by [`details_map`].
+pub(crate) fn parse_details_output(output: &str) -> HashMap<String, SnapDetails> {
+    let mut map: HashMap<String, SnapDetails> = HashMap::new();
     let mut current: Option<String> = None;
     for line in output.lines() {
         if let Some(name) = line.strip_prefix("== ") {
             current = Some(name.trim().to_string());
+            map.entry(name.trim().to_string()).or_default();
         } else if let Some(name) = current.clone() {
-            let summary = line.trim();
-            if !summary.is_empty() {
-                map.insert(name, summary.to_string());
-                current = None;
+            let Some(entry) = map.get_mut(&name) else {
+                continue;
+            };
+            if let Some(summary) = line.strip_prefix("S: ") {
+                let summary = summary.trim();
+                if !summary.is_empty() {
+                    entry.summary = Some(summary.to_string());
+                }
+            } else if let Some(installed) = line.strip_prefix("I: ") {
+                let installed = installed.trim();
+                let parsed = installed
+                    .parse::<u64>()
+                    .ok()
+                    .or_else(|| parse_human_size(installed));
+                if parsed.is_some() {
+                    entry.size_bytes = parsed;
+                }
+            } else if let Some(download) = line.strip_prefix("D: ") {
+                if entry.size_bytes.is_none() {
+                    entry.size_bytes = parse_human_size(download.trim());
+                }
             }
         }
     }
@@ -120,19 +146,20 @@ impl Provider for Snap {
     fn list_installed(&self) -> Result<Vec<App>, ManagerError> {
         let rows = parse_snap_list(&shell::run_managed(ManagerKind::Snap, LIST_CMD)?);
         let names: Vec<&str> = rows.iter().map(|(name, _)| name.as_str()).collect();
-        let summaries = summary_map(&names);
+        let details = details_map(&names);
         Ok(rows
             .into_iter()
             .map(|(name, version)| {
-                let description = summaries.get(&name).cloned();
+                let snap_details = details.get(&name);
                 App {
                     usage: Some(name.clone()),
                     install: Some(format!("sudo snap install {name}")),
+                    size_bytes: snap_details.and_then(|d| d.size_bytes),
                     name: name.clone(),
                     manager: ManagerKind::Snap,
                     installed: true,
                     version: Some(version),
-                    description,
+                    description: snap_details.and_then(|d| d.summary.clone()),
                 }
             })
             .collect())
@@ -145,27 +172,35 @@ impl Provider for Snap {
         }
         let rows = parse_snap_list(&shell::run_managed(ManagerKind::Snap, LIST_CMD)?);
         let installed_set: HashSet<String> = rows.iter().map(|(name, _)| name.clone()).collect();
-        // Summaries require one `snap info` per snap; only pay it when there
-        // is an inventory to describe.
-        let summaries = if rows.is_empty() {
+        // Snap details require one `snap info` per snap; only pay it when
+        // there is an inventory to describe.
+        let details = if rows.is_empty() {
             HashMap::new()
         } else {
             let names: Vec<&str> = rows.iter().map(|(name, _)| name.as_str()).collect();
-            summary_map(&names)
+            details_map(&names)
         };
         let installed_apps: Vec<App> = rows
             .iter()
             .filter(|(name, _)| {
-                app_matches_query(name, summaries.get(name).map(String::as_str), &tokens)
+                app_matches_query(
+                    name,
+                    details.get(name).and_then(|d| d.summary.as_deref()),
+                    &tokens,
+                )
             })
-            .map(|(name, version)| App {
-                usage: Some(name.clone()),
-                install: Some(format!("sudo snap install {name}")),
-                name: name.clone(),
-                manager: ManagerKind::Snap,
-                installed: true,
-                version: Some(version.clone()),
-                description: summaries.get(name).cloned(),
+            .map(|(name, version)| {
+                let snap_details = details.get(name);
+                App {
+                    usage: Some(name.clone()),
+                    install: Some(format!("sudo snap install {name}")),
+                    size_bytes: snap_details.and_then(|d| d.size_bytes),
+                    name: name.clone(),
+                    manager: ManagerKind::Snap,
+                    installed: true,
+                    version: Some(version.clone()),
+                    description: snap_details.and_then(|d| d.summary.clone()),
+                }
             })
             .collect();
         let cmd = format!(
@@ -180,6 +215,7 @@ impl Provider for Snap {
                 App {
                     usage: Some(name.clone()),
                     install: Some(format!("sudo snap install {name}")),
+                    size_bytes: None,
                     name,
                     manager: ManagerKind::Snap,
                     installed: is_installed,
@@ -210,9 +246,6 @@ mod tests {
         "curl                         8.22.0                aoilinux                  -      command line tool and library for transferring data with URLs.(with HTTP3 support)\n",
         "curl-metalink                7.65.2+pkg-6ea8       brlin                     -      Download Metalinks with cURL for Debianish distros\n",
     );
-
-    const SUMMARY_FIXTURE: &str =
-        concat!("== core22\n", "Snap runtime environment\n", "== firefox\n",);
 
     #[test]
     fn rest_after_fields_skips_exact_field_count() {
@@ -252,12 +285,23 @@ mod tests {
     }
 
     #[test]
-    fn parses_summary_blocks() {
-        let map = parse_summary_output(SUMMARY_FIXTURE);
-        assert_eq!(
-            map.get("core22").map(String::as_str),
-            Some("Snap runtime environment")
+    fn parses_details_blocks_with_size_precedence() {
+        let fixture = concat!(
+            "== core22\n",
+            "S: Snap runtime environment\n",
+            "I: 76543210\n",
+            "D: 77MB\n",
+            "== firefox\n",
+            "S: Browser\n",
+            "D: 218MB\n",
         );
-        assert!(!map.contains_key("firefox"));
+        let map = parse_details_output(fixture);
+        let core = map.get("core22").unwrap();
+        assert_eq!(core.summary.as_deref(), Some("Snap runtime environment"));
+        // installed-size wins over the channel download size.
+        assert_eq!(core.size_bytes, Some(76_543_210));
+        let firefox = map.get("firefox").unwrap();
+        assert_eq!(firefox.size_bytes, Some(218_000_000));
+        assert!(!map.contains_key("missing"));
     }
 }

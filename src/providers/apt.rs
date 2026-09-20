@@ -122,6 +122,50 @@ fn non_none(value: &str) -> Option<String> {
     (!value.is_empty() && value != "(none)").then(|| value.to_string())
 }
 
+/// `(installed_size, download_size)` per package from a batched
+/// `apt-cache show` run; installed sizes are KiB, downloads are bytes.
+pub(crate) fn apt_show_size_map(names: &[&str]) -> HashMap<String, (Option<u64>, Option<u64>)> {
+    if names.is_empty() {
+        return HashMap::new();
+    }
+    let args = names
+        .iter()
+        .map(|n| shell::quote(n))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let cmd = format!("LC_ALL=C apt-cache show {args} 2>/dev/null || true");
+    let output = shell::run(&cmd).unwrap_or_default();
+    parse_show_size_output(&output)
+}
+
+/// Parse `apt-cache show` blocks: `Package:` starts an entry, `Installed-Size:`
+/// is reported in KiB and `Size:` in bytes; the first block per package wins.
+pub(crate) fn parse_show_size_output(output: &str) -> HashMap<String, (Option<u64>, Option<u64>)> {
+    let mut map: HashMap<String, (Option<u64>, Option<u64>)> = HashMap::new();
+    let mut current: Option<String> = None;
+    for line in output.lines() {
+        if let Some(name) = line.strip_prefix("Package: ") {
+            current = Some(name.trim().to_string());
+            map.entry(name.trim().to_string()).or_default();
+        } else if let Some(name) = current.clone() {
+            let Some(entry) = map.get_mut(&name) else {
+                continue;
+            };
+            let trimmed = line.trim();
+            if let Some(kib) = trimmed.strip_prefix("Installed-Size: ") {
+                if entry.0.is_none() {
+                    entry.0 = kib.trim().parse::<u64>().ok().map(|k| k * 1024);
+                }
+            } else if let Some(bytes) = trimmed.strip_prefix("Size: ") {
+                if entry.1.is_none() {
+                    entry.1 = bytes.trim().parse::<u64>().ok();
+                }
+            }
+        }
+    }
+    map
+}
+
 impl Provider for Apt {
     fn kind(&self) -> ManagerKind {
         ManagerKind::Apt
@@ -146,6 +190,7 @@ impl Provider for Apt {
         let names: Vec<&str> = hits.iter().map(|(name, _)| name.as_str()).collect();
         let status = deb_status_map(&names);
         let policy = apt_policy_map(&names);
+        let sizes = apt_show_size_map(&names);
         let bins = dpkg::binary_map();
 
         Ok(hits
@@ -159,9 +204,22 @@ impl Provider for Apt {
                 } else {
                     candidate()
                 };
+                // Installed apps report their on-disk size, available ones the
+                // download size of the .deb.
+                let size_bytes = sizes
+                    .get(&name)
+                    .map(|(installed_size, download_size)| {
+                        if installed {
+                            *installed_size
+                        } else {
+                            *download_size
+                        }
+                    })
+                    .flatten();
                 App {
                     usage: installed.then(|| bins.get(&name).cloned()).flatten(),
                     install: Some(format!("sudo apt install {name}")),
+                    size_bytes,
                     name,
                     manager: ManagerKind::Apt,
                     installed,
@@ -227,6 +285,24 @@ mod tests {
         let vim = map.get("vim").unwrap();
         assert_eq!(vim.installed, None);
         assert_eq!(vim.candidate.as_deref(), Some("2:9.1.1230-2"));
+    }
+
+    const SHOW_FIXTURE: &str = concat!(
+        "Package: curl\n",
+        "Installed-Size: 518\n",
+        "Size: 289096\n",
+        "\n",
+        "Package: curl\n",
+        "Installed-Size: 519\n",
+        "Size: 290000\n",
+    );
+
+    #[test]
+    fn parses_show_sizes_keeping_first_block() {
+        let map = parse_show_size_output(SHOW_FIXTURE);
+        let (installed, download) = map.get("curl").copied().unwrap();
+        assert_eq!(installed, Some(518 * 1024));
+        assert_eq!(download, Some(289096));
     }
 
     #[test]

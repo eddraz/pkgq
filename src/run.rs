@@ -120,6 +120,7 @@ mod tests {
             description: None,
             usage: None,
             install: None,
+            size_bytes: None,
         }
     }
 

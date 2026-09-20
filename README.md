@@ -38,7 +38,8 @@ bash-cli search <query> [--manager m1,m2] [--compact] [--installed-only] [--avai
       "version": "8.14.1-2+deb13u5",
       "description": "command line tool for transferring data with URL syntax",
       "usage": "curl",
-      "install": "sudo apt install curl"
+      "install": "sudo apt install curl",
+      "size_bytes": 530432
     }
   ],
   "errors": []
@@ -54,6 +55,9 @@ Field notes:
   `flatpak run <app-id>` for flatpaks, or `null` when unknowable (library
   packages, or bulk dnf inventory).
 - `install` — the command a user would run to install the application.
+- `size_bytes` — on-disk installed size when the app is installed; download
+  size when it is only available; `null` when the manager does not expose it
+  (e.g. flatpak/snap catalog-only results, brew catalog formulae).
 - `errors[].manager` / `errors[].message` — manager-level failures.
 - Results are sorted deterministically by name, then manager.
 

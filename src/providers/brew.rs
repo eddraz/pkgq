@@ -89,16 +89,53 @@ pub(crate) fn installed_pairs() -> Result<Vec<(String, String)>, ManagerError> {
     Ok(parse_list_versions(&output))
 }
 
-fn to_app(name: &str, version: &str, description: Option<String>, installed: bool) -> App {
+fn to_app(
+    name: &str,
+    version: &str,
+    description: Option<String>,
+    installed: bool,
+    size_bytes: Option<u64>,
+) -> App {
     App {
         usage: Some(name.to_string()),
         install: Some(format!("brew install {name}")),
+        size_bytes,
         name: name.to_string(),
         manager: ManagerKind::Brew,
         installed,
         version: (!version.is_empty()).then(|| version.to_string()),
         description,
     }
+}
+
+/// On-disk size per installed formula/cask via one batched `du -sk` over the
+/// Cellar and Caskroom directories.
+pub(crate) fn installed_size_map(names: &[&str]) -> HashMap<String, u64> {
+    if names.is_empty() {
+        return HashMap::new();
+    }
+    let list = names
+        .iter()
+        .map(|n| shell::quote(n))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let cmd = format!(
+        "for n in {list}; do p=\"$(brew --cellar)/$n\"; [ -d \"$p\" ] || p=\"$(brew --caskroom)/$n\"; [ -d \"$p\" ] && du -sk \"$p\" 2>/dev/null; done"
+    );
+    let output = shell::run(&cmd).unwrap_or_default();
+    output
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(2, '\t');
+            let kib = parts.next()?.trim().parse::<u64>().ok()?;
+            let path = parts.next()?.trim();
+            let name = path.rsplit('/').next()?;
+            if name.is_empty() {
+                return None;
+            }
+            Some((name.to_string(), kib * 1024))
+        })
+        .collect()
 }
 
 impl Provider for Brew {
@@ -110,11 +147,12 @@ impl Provider for Brew {
         let pairs = installed_pairs()?;
         let names: Vec<&str> = pairs.iter().map(|(name, _)| name.as_str()).collect();
         let info = info_map(&names);
+        let sizes = installed_size_map(&names);
         Ok(pairs
             .iter()
             .map(|(name, version)| {
                 let description = info.get(name).and_then(|(desc, _)| desc.clone());
-                to_app(name, version, description, true)
+                to_app(name, version, description, true, sizes.get(name).copied())
             })
             .collect())
     }
@@ -126,14 +164,21 @@ impl Provider for Brew {
         }
         let installed: HashMap<String, String> = installed_pairs()?.into_iter().collect();
         // Installed kegs absent from catalog output still match by name.
-        let installed_apps: Vec<App> = installed
+        let matched: Vec<String> = installed
+            .keys()
+            .filter(|name| app_matches_query(name, None, &tokens))
+            .cloned()
+            .collect();
+        let matched_names: Vec<&str> = matched.iter().map(String::as_str).collect();
+        let sizes = installed_size_map(&matched_names);
+        let matched_info = info_map(&matched_names);
+        let installed_apps: Vec<App> = matched
             .iter()
-            .filter(|(name, _)| app_matches_query(name, None, &tokens))
-            .map(|(name, version)| {
-                let description = info_map(&[name.as_str()])
-                    .remove(name)
-                    .and_then(|(desc, _)| desc);
-                to_app(name, version, description, true)
+            .map(|name| {
+                let description = matched_info.get(name).and_then(|(desc, _)| desc.clone());
+                let size = sizes.get(name).copied();
+                let version = installed.get(name).cloned().unwrap_or_default();
+                to_app(name, &version, description, true, size)
             })
             .collect();
         let cmd = format!(
@@ -157,7 +202,7 @@ impl Provider for Brew {
                 }
                 .or(catalog_version)
                 .unwrap_or_default();
-                to_app(name, &version, description, is_installed)
+                to_app(name, &version, description, is_installed, None)
             })
             .collect();
         Ok(merge_installed_and_catalog(installed_apps, catalog))

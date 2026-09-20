@@ -12,7 +12,7 @@ use crate::shell;
 
 pub struct Dpkg;
 
-const QUERY_CMD: &str = "LC_ALL=C dpkg-query -W -f='${Package}\\t${Version}\\t${db:Status-Abbrev}\\t${binary:Summary}\\n'";
+const QUERY_CMD: &str = "LC_ALL=C dpkg-query -W -f='${Package}\\t${Version}\\t${db:Status-Abbrev}\\t${Installed-Size}\\t${binary:Summary}\\n'";
 const LIST_FILES_GLOB: &str = "/var/lib/dpkg/info/*.list";
 
 /// One parsed row of `dpkg-query -W`.
@@ -21,21 +21,27 @@ pub(crate) struct DpkgRow {
     pub name: String,
     pub version: String,
     pub installed: bool,
+    pub size_bytes: Option<u64>,
     pub description: Option<String>,
 }
 
-/// Parse `dpkg-query -W` output with the four-column tab format.
+/// Parse `dpkg-query -W` output with the five-column tab format
+/// (`Installed-Size` is reported by dpkg in KiB).
 pub(crate) fn parse_query_output(output: &str) -> Vec<DpkgRow> {
     output
         .lines()
         .filter_map(|line| {
-            let mut parts = line.splitn(4, '\t');
+            let mut parts = line.splitn(5, '\t');
             let name = parts.next()?.trim();
             if name.is_empty() {
                 return None;
             }
             let version = parts.next()?.trim();
             let status = parts.next()?.trim();
+            let size_bytes = parts
+                .next()
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .map(|kib| kib * 1024);
             let description = parts
                 .next()
                 .map(str::trim)
@@ -45,6 +51,7 @@ pub(crate) fn parse_query_output(output: &str) -> Vec<DpkgRow> {
                 name: name.to_string(),
                 version: version.to_string(),
                 installed: status.starts_with("ii"),
+                size_bytes,
                 description,
             })
         })
@@ -97,6 +104,7 @@ fn row_to_app(row: DpkgRow, bins: &HashMap<String, String>) -> App {
     App {
         usage: bins.get(&name).cloned(),
         install: Some(format!("sudo apt install {name}")),
+        size_bytes: row.size_bytes,
         name,
         manager: ManagerKind::Dpkg,
         installed: true,
@@ -140,10 +148,10 @@ mod tests {
     use super::*;
 
     const FIXTURE: &str = concat!(
-        "7zip\t25.01+dfsg-1~deb13u2\tii \t7-Zip file archiver with a high compression ratio\n",
-        "adduser\t3.152\tii \tadd and remove users and groups\n",
-        "broken-pkg\t1.0\trc \tremoved but config files remain\n",
-        "no-desc\t2.0\tii \t\n",
+        "7zip\t25.01+dfsg-1~deb13u2\tii \t7038\t7-Zip file archiver with a high compression ratio\n",
+        "adduser\t3.152\tii \t675\tadd and remove users and groups\n",
+        "broken-pkg\t1.0\trc \t128\tremoved but config files remain\n",
+        "no-desc\t2.0\tii \t\t\n",
     );
 
     const GREP_FIXTURE: &str = concat!(
@@ -164,6 +172,14 @@ mod tests {
         assert!(!rows[2].installed);
         // Empty summary becomes None.
         assert_eq!(rows[3].description, None);
+    }
+
+    #[test]
+    fn parses_installed_size_from_kib_to_bytes() {
+        let rows = parse_query_output(FIXTURE);
+        assert_eq!(rows[0].size_bytes, Some(7038 * 1024));
+        // Missing size column parses as None.
+        assert_eq!(rows[3].size_bytes, None);
     }
 
     #[test]

@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use crate::model::{App, ManagerError, ManagerKind};
+use crate::model::{parse_human_size, App, ManagerError, ManagerKind};
 use crate::provider::{app_matches_query, merge_installed_and_catalog, query_tokens, Provider};
 use crate::shell;
 
@@ -75,7 +75,7 @@ pub(crate) fn parse_sync_search(output: &str) -> Vec<SyncHit> {
 
 /// Short description per installed package, batched through one bash loop of
 /// `pacman -Qi` calls.
-pub(crate) fn description_map(names: &[&str]) -> HashMap<String, String> {
+pub(crate) fn details_map(names: &[&str]) -> HashMap<String, PacmanDetails> {
     if names.is_empty() {
         return HashMap::new();
     }
@@ -85,23 +85,40 @@ pub(crate) fn description_map(names: &[&str]) -> HashMap<String, String> {
         .collect::<Vec<_>>()
         .join(" ");
     let cmd = format!(
-        "for p in {list}; do echo \"== $p\"; LC_ALL=C pacman -Qi \"$p\" 2>/dev/null | sed -n 's/^Description[[:space:]]*:[[:space:]]*//p'; done"
+        "for p in {list}; do echo \"== $p\"; LC_ALL=C pacman -Qi \"$p\" 2>/dev/null | sed -n 's/^Description[[:space:]]*:[[:space:]]*//p; s/^Installed Size[[:space:]]*:[[:space:]]*//p'; done"
     );
     let output = shell::run(&cmd).unwrap_or_default();
-    parse_blocks_output(&output)
+    parse_details_output(&output)
 }
 
-/// Parse `== name` / single-line value blocks.
-pub(crate) fn parse_blocks_output(output: &str) -> HashMap<String, String> {
-    let mut map = HashMap::new();
+/// Description plus on-disk installed size for one package.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PacmanDetails {
+    pub description: Option<String>,
+    pub size_bytes: Option<u64>,
+}
+
+/// Parse `== name` blocks whose first value line is the description and whose
+/// second is the human-formatted installed size (`5.36 MiB`).
+pub(crate) fn parse_details_output(output: &str) -> HashMap<String, PacmanDetails> {
+    let mut map: HashMap<String, PacmanDetails> = HashMap::new();
     let mut current: Option<String> = None;
     for line in output.lines() {
         if let Some(name) = line.strip_prefix("== ") {
             current = Some(name.trim().to_string());
+            map.entry(name.trim().to_string()).or_default();
         } else if let Some(name) = current.clone() {
+            let Some(entry) = map.get_mut(&name) else {
+                continue;
+            };
             let value = line.trim();
-            if !value.is_empty() {
-                map.insert(name, value.to_string());
+            if value.is_empty() {
+                continue;
+            }
+            if entry.description.is_none() {
+                entry.description = Some(value.to_string());
+            } else if entry.size_bytes.is_none() {
+                entry.size_bytes = parse_human_size(value);
                 current = None;
             }
         }
@@ -155,15 +172,18 @@ impl Provider for Pacman {
         let output = shell::run_managed(ManagerKind::Pacman, "LC_ALL=C pacman -Q")?;
         let rows = parse_query_list(&output);
         let names: Vec<&str> = rows.iter().map(|(name, _)| name.as_str()).collect();
-        let descriptions = description_map(&names);
+        let details = details_map(&names);
         let bins = binary_map();
         Ok(rows
             .into_iter()
             .map(|(name, version)| {
+                let pkg_details = details.get(&name);
                 let usage = bins.get(&name).cloned();
-                let description = descriptions.get(&name).cloned();
+                let size_bytes = pkg_details.and_then(|d| d.size_bytes);
+                let description = pkg_details.and_then(|d| d.description.clone());
                 App {
                     install: Some(format!("sudo pacman -S {name}")),
+                    size_bytes,
                     name,
                     manager: ManagerKind::Pacman,
                     installed: true,
@@ -192,18 +212,25 @@ impl Provider for Pacman {
             .filter(|(name, _)| app_matches_query(name, None, &tokens))
             .collect();
         let matched_names: Vec<&str> = matched.iter().map(|(name, _)| name.as_str()).collect();
-        let descriptions = description_map(&matched_names);
+        let details = details_map(&matched_names);
         let bins = binary_map();
         let installed_apps: Vec<App> = matched
             .iter()
-            .map(|(name, version)| App {
-                usage: bins.get(name).cloned(),
-                install: Some(format!("sudo pacman -S {name}")),
-                name: (*name).clone(),
-                manager: ManagerKind::Pacman,
-                installed: true,
-                version: Some(version.clone()),
-                description: descriptions.get(name).cloned(),
+            .map(|(name, version)| {
+                let pkg_details = details.get(name);
+                let usage = bins.get(name).cloned();
+                let size_bytes = pkg_details.and_then(|d| d.size_bytes);
+                let description = pkg_details.and_then(|d| d.description.clone());
+                App {
+                    usage,
+                    install: Some(format!("sudo pacman -S {name}")),
+                    size_bytes,
+                    name: (*name).clone(),
+                    manager: ManagerKind::Pacman,
+                    installed: true,
+                    version: Some(version.clone()),
+                    description,
+                }
             })
             .collect();
         let cmd = format!(
@@ -220,6 +247,7 @@ impl Provider for Pacman {
                 App {
                     usage: bins.get(&hit.name).cloned(),
                     install: Some(format!("sudo pacman -S {}", hit.name)),
+                    size_bytes: None,
                     name: hit.name,
                     manager: ManagerKind::Pacman,
                     installed,

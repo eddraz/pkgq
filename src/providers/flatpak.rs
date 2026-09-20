@@ -6,13 +6,14 @@
 
 use std::collections::HashSet;
 
-use crate::model::{App, ManagerError, ManagerKind};
+use crate::model::{parse_human_size, App, ManagerError, ManagerKind};
 use crate::provider::{app_matches_query, merge_installed_and_catalog, query_tokens, Provider};
 use crate::shell;
 
 pub struct Flatpak;
 
-const LIST_CMD: &str = "LC_ALL=C flatpak list --app --columns=application,name,version,description";
+const LIST_CMD: &str =
+    "LC_ALL=C flatpak list --app --columns=application,name,version,description,size";
 const SEARCH_COLUMNS: &str = "--columns=application,name,version,description";
 
 /// One parsed flatpak row (already deduplicated).
@@ -22,6 +23,7 @@ pub(crate) struct FlatpakRow {
     pub name: String,
     pub version: Option<String>,
     pub description: Option<String>,
+    pub size_bytes: Option<u64>,
 }
 
 /// Parse tab-separated `application,name,version,description` output.
@@ -41,7 +43,7 @@ pub(crate) fn parse_columns_output(output: &str) -> Vec<FlatpakRow> {
         if id.is_empty() || !seen.insert(id) {
             continue;
         }
-        let mut parts = line.splitn(4, '\t');
+        let mut parts = line.splitn(5, '\t');
         let _id = parts.next();
         let field = |v: Option<&str>| {
             v.map(str::trim)
@@ -53,6 +55,8 @@ pub(crate) fn parse_columns_output(output: &str) -> Vec<FlatpakRow> {
             name: field(parts.next()).unwrap_or_else(|| id.to_string()),
             version: field(parts.next()),
             description: field(parts.next()),
+            // Search rows have no size column and parse as None.
+            size_bytes: parts.next().and_then(parse_human_size),
         });
     }
     rows
@@ -68,6 +72,7 @@ fn row_to_app(row: &FlatpakRow, installed: bool, description: Option<String>) ->
     App {
         usage: Some(format!("flatpak run {}", row.id)),
         install: Some(format!("flatpak install {}", row.id)),
+        size_bytes: row.size_bytes,
         name: row.name.clone(),
         manager: ManagerKind::Flatpak,
         installed,
@@ -126,10 +131,10 @@ mod tests {
     use super::*;
 
     const LIST_FIXTURE: &str = concat!(
-        "com.mojang.Minecraft\tMinecraft Launcher\t2.1.3\tCrea tu propio mundo\n",
-        "com.mojang.Minecraft\tMinecraft Launcher\t2.1.3\tCrea tu propio mundo\n",
-        "org.mozilla.firefox\tFirefox\t156.0\tFast, Private & Safe Web Browser\n",
-        "org.cutwire.Drift\tDrift\t\tEdit and export videos easily\n",
+        "com.mojang.Minecraft\tMinecraft Launcher\t2.1.3\tCrea tu propio mundo\t70,2 MB\n",
+        "com.mojang.Minecraft\tMinecraft Launcher\t2.1.3\tCrea tu propio mundo\t70,2 MB\n",
+        "org.mozilla.firefox\tFirefox\t156.0\tFast, Private & Safe Web Browser\t336.8 MB\n",
+        "org.cutwire.Drift\tDrift\t\tEdit and export videos easily\t63.7 MB\n",
     );
 
     const SEARCH_FIXTURE: &str = concat!(
@@ -143,6 +148,14 @@ mod tests {
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].id, "com.mojang.Minecraft");
         assert_eq!(rows[1].id, "org.mozilla.firefox");
+    }
+
+    #[test]
+    fn parses_human_sizes_from_size_column() {
+        let rows = parse_columns_output(LIST_FIXTURE);
+        assert_eq!(rows[0].size_bytes, Some(70_200_000));
+        assert_eq!(rows[1].size_bytes, Some(336_800_000));
+        assert_eq!(rows[2].size_bytes, Some(63_700_000));
     }
 
     #[test]
@@ -167,10 +180,12 @@ mod tests {
     }
 
     #[test]
-    fn parses_search_rows() {
+    fn parses_search_rows_without_size_column() {
         let rows = parse_columns_output(SEARCH_FIXTURE);
         assert_eq!(rows[0].name, "Vim");
         assert_eq!(rows[0].version.as_deref(), Some("v9.2.1025-1-g5c9c5a43c"));
         assert_eq!(rows[1].id, "io.neovim.nvim");
+        // Catalog search has no size column.
+        assert_eq!(rows[0].size_bytes, None);
     }
 }

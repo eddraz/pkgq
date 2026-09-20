@@ -119,6 +119,7 @@ mod tests {
             description: description.map(str::to_string),
             usage: None,
             install: None,
+            size_bytes: None,
         }
     }
 

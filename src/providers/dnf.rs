@@ -15,14 +15,16 @@ pub(crate) struct RpmRow {
     pub name: String,
     pub version: String,
     pub description: Option<String>,
+    pub size_bytes: Option<u64>,
 }
 
-/// Parse `rpm -qa --qf '%{NAME}\t%{VERSION}-%{RELEASE}\t%{SUMMARY}\n'` output.
+/// Parse `rpm -qa --qf '%{NAME}\t%{VERSION}-%{RELEASE}\t%{SUMMARY}\t%{SIZE}\n'`
+/// output (`SIZE` is bytes).
 pub(crate) fn parse_rpm_qa(output: &str) -> Vec<RpmRow> {
     output
         .lines()
         .filter_map(|line| {
-            let mut parts = line.splitn(3, '\t');
+            let mut parts = line.splitn(4, '\t');
             let name = parts.next()?.trim();
             if name.is_empty() {
                 return None;
@@ -33,10 +35,12 @@ pub(crate) fn parse_rpm_qa(output: &str) -> Vec<RpmRow> {
                 .map(str::trim)
                 .filter(|d| !d.is_empty() && *d != "(none)")
                 .map(str::to_string);
+            let size_bytes = parts.next().and_then(|s| s.trim().parse::<u64>().ok());
             Some(RpmRow {
                 name: name.to_string(),
                 version: version.to_string(),
                 description,
+                size_bytes,
             })
         })
         .collect()
@@ -64,7 +68,7 @@ pub(crate) fn parse_dnf_search(output: &str) -> Vec<(String, Option<String>)> {
 
 /// Installed rows through rpm (present on every dnf system), one call.
 pub(crate) fn installed_rows() -> Result<Vec<RpmRow>, ManagerError> {
-    let cmd = "LC_ALL=C rpm -qa --qf '%{NAME}\\t%{VERSION}-%{RELEASE}\\t%{SUMMARY}\\n' 2>/dev/null";
+    let cmd = "LC_ALL=C rpm -qa --qf '%{NAME}\\t%{VERSION}-%{RELEASE}\\t%{SUMMARY}\\t%{SIZE}\\n' 2>/dev/null";
     let output = shell::run_managed(ManagerKind::Dnf, cmd)?;
     Ok(parse_rpm_qa(&output))
 }
@@ -111,6 +115,7 @@ impl Provider for Dnf {
                 // usage stays null for the bulk inventory (documented).
                 usage: None,
                 install: Some(format!("sudo dnf install {}", row.name)),
+                size_bytes: row.size_bytes,
                 name: row.name,
                 manager: ManagerKind::Dnf,
                 installed: true,
@@ -137,6 +142,7 @@ impl Provider for Dnf {
             .map(|row| App {
                 usage: None,
                 install: Some(format!("sudo dnf install {}", row.name)),
+                size_bytes: row.size_bytes,
                 name: row.name.clone(),
                 manager: ManagerKind::Dnf,
                 installed: true,
@@ -164,6 +170,7 @@ impl Provider for Dnf {
                 App {
                     usage: bins.get(&name).cloned(),
                     install: Some(format!("sudo dnf install {name}")),
+                    size_bytes: None,
                     name,
                     manager: ManagerKind::Dnf,
                     installed,
