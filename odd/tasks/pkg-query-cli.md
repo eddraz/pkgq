@@ -1,7 +1,8 @@
 # Feature: pkg-query-cli (Rust CLI to inventory and search OS applications)
 
-Status: in_progress
-Branch: feat/pkg-query-cli (work-unit commits, no push without user decision)
+Status: published — github.com/eddraz/pkgq (master)
+Crate/binary: pkgq (renamed from bash-cli)
+Branch history: feat/pkg-query-cli merged fast-forward into master
 
 ## Goal
 
