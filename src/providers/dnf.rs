@@ -157,6 +157,8 @@ impl Provider for Dnf {
                 depends: None,
                 install_date: row.install_date,
                 available_version: None,
+                matched_tokens: Vec::new(),
+                confidence: None,
                 name: row.name,
                 manager: ManagerKind::Dnf,
                 installed: true,
@@ -194,6 +196,8 @@ impl Provider for Dnf {
                 depends: None,
                 install_date: row.install_date.clone(),
                 available_version: None,
+                matched_tokens: Vec::new(),
+                confidence: None,
                 name: row.name.clone(),
                 manager: ManagerKind::Dnf,
                 installed: true,
@@ -232,6 +236,8 @@ impl Provider for Dnf {
                     depends: None,
                     install_date: None,
                     available_version: None,
+                    matched_tokens: Vec::new(),
+                    confidence: None,
                     name,
                     manager: ManagerKind::Dnf,
                     installed,
@@ -278,6 +284,8 @@ impl Provider for Dnf {
                 version: installed_map.get(&name).cloned(),
                 description: None,
                 available_version: Some(available_version),
+                matched_tokens: Vec::new(),
+                confidence: None,
             })
             .collect())
     }

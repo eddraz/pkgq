@@ -67,6 +67,11 @@ pub struct App {
     /// Newer version available for this installed app; only filled by the
     /// `outdated` command.
     pub available_version: Option<String>,
+    /// Query tokens that matched this app (including synonyms); only filled
+    /// by `search`. Empty means the app matched semantically, not lexically.
+    pub matched_tokens: Vec<String>,
+    /// Relevance confidence in [0, 1]; only filled by `search`.
+    pub confidence: Option<f64>,
 }
 
 /// Parse human-formatted sizes such as `70.2 MB`, `77MB`, `5.36 MiB`, `512 B`.
@@ -156,6 +161,8 @@ mod tests {
             description: None,
             usage: None,
             install: Some("sudo apt install curl".into()),
+            matched_tokens: Vec::new(),
+            confidence: None,
             installed_bytes: None,
             download_bytes: None,
             homepage: None,

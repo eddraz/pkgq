@@ -227,6 +227,8 @@ impl Provider for Pacman {
                     depends: None,
                     install_date: pkg_details.and_then(|d| d.install_date.clone()),
                     available_version: None,
+                    matched_tokens: Vec::new(),
+                    confidence: None,
                     name,
                     manager: ManagerKind::Pacman,
                     installed: true,
@@ -276,6 +278,8 @@ impl Provider for Pacman {
                     depends: None,
                     install_date: pkg_details.and_then(|d| d.install_date.clone()),
                     available_version: None,
+                    matched_tokens: Vec::new(),
+                    confidence: None,
                     name: (*name).clone(),
                     manager: ManagerKind::Pacman,
                     installed: true,
@@ -309,6 +313,8 @@ impl Provider for Pacman {
                     depends: None,
                     install_date: None,
                     available_version: None,
+                    matched_tokens: Vec::new(),
+                    confidence: None,
                     name: hit.name,
                     manager: ManagerKind::Pacman,
                     installed,
@@ -346,6 +352,8 @@ impl Provider for Pacman {
                 version: Some(installed_version),
                 description: None,
                 available_version: Some(available_version),
+                matched_tokens: Vec::new(),
+                confidence: None,
             })
             .collect())
     }

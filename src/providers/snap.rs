@@ -183,6 +183,8 @@ impl Provider for Snap {
                     depends: None,
                     install_date: None,
                     available_version: None,
+                    matched_tokens: Vec::new(),
+                    confidence: None,
                     name: name.clone(),
                     manager: ManagerKind::Snap,
                     installed: true,
@@ -233,6 +235,8 @@ impl Provider for Snap {
                     depends: None,
                     install_date: None,
                     available_version: None,
+                    matched_tokens: Vec::new(),
+                    confidence: None,
                     name: name.clone(),
                     manager: ManagerKind::Snap,
                     installed: true,
@@ -264,6 +268,8 @@ impl Provider for Snap {
                     depends: None,
                     install_date: None,
                     available_version: None,
+                    matched_tokens: Vec::new(),
+                    confidence: None,
                     name,
                     manager: ManagerKind::Snap,
                     installed: is_installed,
@@ -306,6 +312,8 @@ impl Provider for Snap {
                 version: current.get(&name).cloned(),
                 description: None,
                 available_version: Some(available_version),
+                matched_tokens: Vec::new(),
+                confidence: None,
             })
             .collect())
     }

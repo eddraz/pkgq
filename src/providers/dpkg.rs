@@ -122,6 +122,8 @@ fn row_to_app(row: DpkgRow, bins: &HashMap<String, String>) -> App {
         depends: None,
         install_date: None,
         available_version: None,
+        matched_tokens: Vec::new(),
+        confidence: None,
         name,
         manager: ManagerKind::Dpkg,
         installed: true,

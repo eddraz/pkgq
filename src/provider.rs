@@ -73,33 +73,45 @@ pub(crate) fn contains_word(hay: &str, needle: &str) -> bool {
     false
 }
 
-/// Relevance score of an application for a tokenized query. Every token hit
-/// adds points; name hits outweigh description hits and word-boundary hits
-/// outweigh bare substrings, so AND matches naturally outrank OR matches.
-pub(crate) fn relevance_score(name: &str, description: Option<&str>, tokens: &[String]) -> i64 {
+/// Maximum achievable relevance for a token set: an exact name match (+200)
+/// with every token also hitting name and description as whole words (+60).
+/// Score an app and report which query tokens matched anywhere (name or
+/// description, word or substring). Tokens without any hit are omitted.
+pub(crate) fn score_with_matches(
+    name: &str,
+    description: Option<&str>,
+    tokens: &[String],
+) -> (i64, Vec<String>) {
     if tokens.is_empty() {
-        return 0;
+        return (0, Vec::new());
     }
     let name_lower = name.to_lowercase();
     let description_lower = description.unwrap_or("").to_lowercase();
     let mut score: i64 = 0;
+    let mut matched: Vec<String> = Vec::new();
     for token in tokens {
         // Very short tokens (c, r, de) only score on word boundaries; as
         // substrings they match half the English language.
         let substring_scores = token.chars().count() > 2;
+        let mut hits = 0i64;
         if contains_word(&name_lower, token) {
             score += 50;
+            hits += 1;
         } else if substring_scores && name_lower.contains(token) {
             score += 25;
+            hits += 1;
         }
         if contains_word(&description_lower, token) {
             score += 10;
+            hits += 1;
         } else if substring_scores && description_lower.contains(token) {
             score += 3;
+            hits += 1;
+        }
+        if hits > 0 {
+            matched.push(token.clone());
         }
     }
-    // Phrase bonuses accept both token orders: "editor de video" (ES token
-    // order) must also match the English collocation "video editor".
     let phrase = tokens.join(" ");
     let phrase_reversed = tokens.iter().rev().cloned().collect::<Vec<_>>().join(" ");
     if name_lower == phrase || name_lower == phrase_reversed {
@@ -112,13 +124,13 @@ pub(crate) fn relevance_score(name: &str, description: Option<&str>, tokens: &[S
         && (contains_word(&description_lower, &phrase)
             || contains_word(&description_lower, &phrase_reversed))
     {
-        // A full-phrase description hit ("non-linear video editor") marks the
-        // app the query is actually about; keep it close to name matches.
         score += 40;
     }
-    score
+    (score, matched)
 }
 
+/// Relevance score of an application for a tokenized query. Every token hit
+/// adds points; name hits outweigh description hits and word-boundary hits
 /// Normalize a query into scored tokens (accent-folded, stopwords removed,
 /// ES→EN synonyms expanded). See [`crate::query::expand_query`].
 pub(crate) fn query_tokens(query: &str) -> Vec<String> {
@@ -127,7 +139,7 @@ pub(crate) fn query_tokens(query: &str) -> Vec<String> {
 
 /// Permissive candidate gate: true when at least one token appears
 /// (case-insensitively) in the name or the description. Ordering is decided
-/// by [`relevance_score`], so multi-token matches naturally outrank
+/// by [`score_with_matches`], so multi-token matches naturally outrank
 /// single-token ones.
 pub(crate) fn app_matches_query(name: &str, description: Option<&str>, tokens: &[String]) -> bool {
     if tokens.is_empty() {
@@ -202,6 +214,8 @@ mod tests {
             depends: None,
             install_date: None,
             available_version: None,
+            matched_tokens: Vec::new(),
+            confidence: None,
         }
     }
 
@@ -249,10 +263,10 @@ mod tests {
     #[test]
     fn relevance_prefers_name_over_description_and_words_over_substrings() {
         let tokens = query_tokens("tar");
-        let name_word = relevance_score("tar", Some("unrelated"), &tokens);
-        let name_substring = relevance_score("startar", Some("unrelated"), &tokens);
-        let description_word = relevance_score("zzz", Some("a tar utility"), &tokens);
-        let description_substring = relevance_score("zzz", Some("it started"), &tokens);
+        let name_word = score_with_matches("tar", Some("unrelated"), &tokens).0;
+        let name_substring = score_with_matches("startar", Some("unrelated"), &tokens).0;
+        let description_word = score_with_matches("zzz", Some("a tar utility"), &tokens).0;
+        let description_substring = score_with_matches("zzz", Some("it started"), &tokens).0;
         assert!(name_word > name_substring);
         assert!(name_substring > description_word);
         assert!(description_word > description_substring);
@@ -261,13 +275,14 @@ mod tests {
     #[test]
     fn relevance_rewards_phrase_in_name_and_multi_token_hits() {
         let tokens = query_tokens("video editor");
-        let phrase_name = relevance_score("video editor", None, &tokens);
-        let both_tokens = relevance_score("kdenlive", Some("non-linear video editor"), &tokens);
-        let one_token = relevance_score("drift", Some("export videos"), &tokens);
+        let phrase_name = score_with_matches("video editor", None, &tokens).0;
+        let both_tokens =
+            score_with_matches("kdenlive", Some("non-linear video editor"), &tokens).0;
+        let one_token = score_with_matches("drift", Some("export videos"), &tokens).0;
         assert!(phrase_name > both_tokens);
         assert!(both_tokens > one_token);
         assert!(one_token > 0);
-        assert_eq!(relevance_score("zzz", None, &[]), 0);
+        assert_eq!(score_with_matches("zzz", None, &[]).0, 0);
     }
 
     #[test]
@@ -275,12 +290,13 @@ mod tests {
         // "editor de video" expands to [editor, video]; English descriptions
         // say "video editor". The reversed phrase must score in descriptions.
         let tokens = query_tokens("editor de video");
-        let editor = relevance_score("kdenlive", Some("non-linear video editor"), &tokens);
-        let driver = relevance_score(
+        let editor = score_with_matches("kdenlive", Some("non-linear video editor"), &tokens).0;
+        let driver = score_with_matches(
             "xserver-xorg-video-all",
             Some("X.Org X server -- output driver metapackage"),
             &tokens,
-        );
+        )
+        .0;
         assert!(editor > driver);
     }
 

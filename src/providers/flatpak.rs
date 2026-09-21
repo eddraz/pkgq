@@ -88,6 +88,8 @@ fn row_to_app(row: &FlatpakRow, installed: bool, description: Option<String>) ->
         depends: None,
         install_date: None,
         available_version: None,
+        matched_tokens: Vec::new(),
+        confidence: None,
         name: row.name.clone(),
         manager: ManagerKind::Flatpak,
         installed,

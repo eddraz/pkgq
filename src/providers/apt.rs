@@ -269,6 +269,8 @@ impl Provider for Apt {
                     depends: show_details.and_then(|d| d.depends.clone()),
                     install_date: None,
                     available_version: None,
+                    matched_tokens: Vec::new(),
+                    confidence: None,
                     name,
                     manager: ManagerKind::Apt,
                     installed,
@@ -311,6 +313,8 @@ impl Provider for Apt {
                     version: u.installed_version,
                     description: None,
                     available_version: u.available_version,
+                    matched_tokens: Vec::new(),
+                    confidence: None,
                 }
             })
             .collect())

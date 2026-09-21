@@ -204,13 +204,8 @@ pub fn load_index() -> Option<SemanticIndex> {
 
 /// Blended score for a search result: semantic similarity (when an index is
 /// available) plus the normalized lexical score.
-pub fn blended_score(lexical: i64, max_lexical: i64, similarity: f64) -> f64 {
-    let lexical_component = if max_lexical > 0 {
-        lexical as f64 / max_lexical as f64
-    } else {
-        0.0
-    };
-    SEMANTIC_WEIGHT * similarity + LEXICAL_WEIGHT * lexical_component
+pub fn blended_score(lexical_confidence: f64, similarity: f64) -> f64 {
+    SEMANTIC_WEIGHT * similarity + LEXICAL_WEIGHT * lexical_confidence
 }
 
 /// An embedding lookup keyed by (app name, manager), prebuilt once per query.
@@ -291,9 +286,9 @@ mod tests {
     #[test]
     fn blended_score_respects_weights() {
         // Full semantic match with no lexical signal.
-        assert!((blended_score(0, 100, 1.0) - SEMANTIC_WEIGHT).abs() < 1e-9);
+        assert!((blended_score(0.0, 1.0) - SEMANTIC_WEIGHT).abs() < 1e-9);
         // Full lexical match with no semantic signal.
-        assert!((blended_score(100, 100, 0.0) - LEXICAL_WEIGHT).abs() < 1e-9);
-        assert!(blended_score(100, 100, 1.0) > blended_score(50, 100, 0.5));
+        assert!((blended_score(1.0, 0.0) - LEXICAL_WEIGHT).abs() < 1e-9);
+        assert!(blended_score(1.0, 1.0) > blended_score(0.5, 0.5));
     }
 }

@@ -159,6 +159,8 @@ fn to_app(
         depends: brew_info.depends,
         install_date: None,
         available_version: None,
+        matched_tokens: Vec::new(),
+        confidence: None,
         name: name.to_string(),
         manager: ManagerKind::Brew,
         installed,
