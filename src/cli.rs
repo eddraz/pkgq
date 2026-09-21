@@ -75,6 +75,12 @@ pub enum Command {
         #[arg(long)]
         compact: bool,
     },
+    /// Self-update the pkgq binary from the latest GitHub release.
+    Update {
+        /// Emit single-line JSON instead of pretty-printed.
+        #[arg(long)]
+        compact: bool,
+    },
     /// Search applications, installed or available, across detected package managers.
     Search {
         /// Text matched against package names and descriptions.
@@ -106,6 +112,7 @@ impl Command {
             | Command::Search { manager, .. }
             | Command::Outdated { manager, .. }
             | Command::Index { manager, .. } => manager,
+            Command::Update { .. } => return None,
         };
         (!args.is_empty()).then(|| args.iter().map(|arg| ManagerKind::from(*arg)).collect())
     }
@@ -116,7 +123,8 @@ impl Command {
             Command::List { compact, .. }
             | Command::Search { compact, .. }
             | Command::Outdated { compact, .. }
-            | Command::Index { compact, .. } => *compact,
+            | Command::Index { compact, .. }
+            | Command::Update { compact, .. } => *compact,
         }
     }
 }
