@@ -1,36 +1,22 @@
-//! Optional semantic layer: an embedding index built with a local
-//! llama-server (OpenAI-compatible `/v1/embeddings`, e.g. bge-m3).
+//! Optional semantic layer: in-process candle bge-m3 embeddings.
 //!
 //! `pkgq index` embeds every inventory description once into
 //! `~/.cache/pkgq/index.json`; `search` blends lexical and semantic scores
-//! when the index exists and the server responds, and silently falls back to
-//! lexical-only otherwise. The embeddings call is one `curl` per batch
-//! through the bash adapter — zero extra Rust dependencies.
+//! when the index exists and the native engine produced it, and silently
+//! falls back to lexical-only otherwise.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::embeddings;
 use crate::model::{ManagerError, ManagerKind};
 use crate::run;
-use crate::shell;
 
-const DEFAULT_EMBED_URL: &str = "http://127.0.0.1:28488/v1/embeddings";
-const DEFAULT_EMBED_MODEL: &str = "bge-m3";
-const BATCH_SIZE: usize = 16;
-const EMBED_TIMEOUT_SECS: u64 = 120;
 /// Semantic dominates for cross-language queries; lexical keeps precision.
 const SEMANTIC_WEIGHT: f64 = 0.6;
 const LEXICAL_WEIGHT: f64 = 0.4;
-
-fn embed_url() -> String {
-    std::env::var("PKGQ_EMBED_URL").unwrap_or_else(|_| DEFAULT_EMBED_URL.to_string())
-}
-
-fn embed_model() -> String {
-    std::env::var("PKGQ_EMBED_MODEL").unwrap_or_else(|_| DEFAULT_EMBED_MODEL.to_string())
-}
 
 fn cache_path() -> PathBuf {
     let base = std::env::var("XDG_CACHE_HOME")
@@ -61,6 +47,8 @@ pub struct IndexItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SemanticIndex {
     pub model: String,
+    #[serde(default)]
+    pub engine: String,
     pub generated_at: String,
     pub items: Vec<IndexItem>,
 }
@@ -81,59 +69,9 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f64 {
     }
 }
 
-/// Embed texts through the configured llama-server endpoint, in batches.
+/// Embed texts through the native candle engine.
 pub fn embed_texts(texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
-    if texts.is_empty() {
-        return Ok(Vec::new());
-    }
-    let url = embed_url();
-    let model = embed_model();
-    let mut out: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
-    for (batch_index, batch) in texts.chunks(BATCH_SIZE).enumerate() {
-        let body = serde_json::json!({ "model": model, "input": batch }).to_string();
-        let body_file = std::env::temp_dir().join(format!(
-            "pkgq-embed-{}-{batch_index}.json",
-            std::process::id()
-        ));
-        std::fs::write(&body_file, body).map_err(|e| e.to_string())?;
-        let cmd = format!(
-            "curl -s -m {EMBED_TIMEOUT_SECS} -X POST {} -H 'Content-Type: application/json' --data-binary @{}",
-            shell::quote(&url),
-            shell::quote(&body_file.to_string_lossy())
-        );
-        let response = shell::run(&cmd).map_err(|e| e.to_string());
-        let _ = std::fs::remove_file(&body_file);
-        let response = response?;
-        let value: serde_json::Value = serde_json::from_str(response.trim())
-            .map_err(|e| format!("non-JSON embeddings response: {e}"))?;
-        let mut data: Vec<(usize, Vec<f32>)> = value
-            .get("data")
-            .and_then(serde_json::Value::as_array)
-            .ok_or_else(|| "embeddings response has no 'data' array".to_string())?
-            .iter()
-            .map(|item| {
-                let index = item
-                    .get("index")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0) as usize;
-                let embedding = item
-                    .get("embedding")
-                    .and_then(serde_json::Value::as_array)
-                    .map(|values| {
-                        values
-                            .iter()
-                            .filter_map(serde_json::Value::as_f64)
-                            .map(|value| value as f32)
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                (index, embedding)
-            })
-            .collect();
-        data.sort_by_key(|(index, _)| *index);
-        out.extend(data.into_iter().map(|(_, embedding)| embedding));
-    }
-    Ok(out)
+    embeddings::embed_texts(texts)
 }
 
 /// Build the semantic index over the (optionally filtered) local inventory.
@@ -152,12 +90,13 @@ pub fn build_index(
     let embeddings = embed_texts(&texts).map_err(|e| {
         vec![ManagerError {
             manager: ManagerKind::Apt,
-            message: format!("semantic index: {e} (is llama-server running?)"),
+            message: format!("semantic index: {e}"),
         }]
     })?;
 
     let index = SemanticIndex {
-        model: embed_model(),
+        model: embeddings::model_repo(),
+        engine: embeddings::ENGINE_ID.to_string(),
         generated_at: crate::timefmt::now_rfc3339_utc(),
         items: output
             .results
@@ -196,10 +135,16 @@ pub fn build_index(
     }))
 }
 
-/// Load the semantic index if it exists on disk.
+/// Load the semantic index if it exists on disk and was produced by the
+/// current engine.  Old llama-server indexes (no `engine` or a mismatched
+/// value) are ignored so that `pkgq index` rebuilds them.
 pub fn load_index() -> Option<SemanticIndex> {
     let content = std::fs::read_to_string(cache_path()).ok()?;
-    serde_json::from_str(&content).ok()
+    let index: SemanticIndex = serde_json::from_str(&content).ok()?;
+    if index.engine != embeddings::ENGINE_ID {
+        return None;
+    }
+    Some(index)
 }
 
 /// Blended score for a search result: semantic similarity (when an index is
@@ -252,7 +197,8 @@ mod tests {
     #[test]
     fn index_roundtrip_through_json() {
         let index = SemanticIndex {
-            model: "bge-m3".into(),
+            model: "BAAI/bge-m3".into(),
+            engine: embeddings::ENGINE_ID.into(),
             generated_at: "2026-09-20T00:00:00Z".into(),
             items: vec![IndexItem {
                 name: "Drift".into(),
@@ -267,12 +213,52 @@ mod tests {
         let parsed: SemanticIndex = serde_json::from_str(&serialized).unwrap();
         assert_eq!(parsed.items[0].name, "Drift");
         assert_eq!(parsed.items[0].embedding, vec![0.1, 0.2, 0.3]);
+        assert_eq!(parsed.engine, embeddings::ENGINE_ID);
+    }
+
+    #[test]
+    fn old_index_without_engine_is_stale() {
+        let serialized = r#"{
+            "model": "bge-m3",
+            "generated_at": "2026-09-20T00:00:00Z",
+            "items": []
+        }"#;
+        let index: SemanticIndex = serde_json::from_str(serialized).unwrap();
+        assert_ne!(index.engine, embeddings::ENGINE_ID);
+    }
+
+    #[test]
+    fn mismatched_engine_is_stale() {
+        let serialized = r#"{
+            "model": "bge-m3",
+            "engine": "llama-server-v1",
+            "generated_at": "2026-09-20T00:00:00Z",
+            "items": []
+        }"#;
+        let index: SemanticIndex = serde_json::from_str(serialized).unwrap();
+        assert_ne!(index.engine, embeddings::ENGINE_ID);
+    }
+
+    #[test]
+    fn current_engine_is_not_stale() {
+        let serialized = format!(
+            r#"{{
+                "model": "BAAI/bge-m3",
+                "engine": "{}",
+                "generated_at": "2026-09-20T00:00:00Z",
+                "items": []
+            }}"#,
+            embeddings::ENGINE_ID
+        );
+        let index: SemanticIndex = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(index.engine, embeddings::ENGINE_ID);
     }
 
     #[test]
     fn similarity_is_zero_for_missing_items() {
         let index = SemanticIndex {
             model: "m".into(),
+            engine: embeddings::ENGINE_ID.into(),
             generated_at: String::new(),
             items: vec![],
         };
