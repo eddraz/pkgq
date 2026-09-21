@@ -1,5 +1,6 @@
 //! pkgq: inventory and search OS applications across package managers as JSON.
 
+mod bootstrap;
 mod cli;
 mod model;
 mod provider;
@@ -17,6 +18,11 @@ use clap::Parser as _;
 use serde::Serialize;
 
 fn main() -> ExitCode {
+    // Bootstrap the semantic-search assets (llama.cpp fork + bge-m3 model)
+    // on every execution; verification is two cheap filesystem checks and
+    // anything missing is cloned/downloaded. PKGQ_NO_BOOTSTRAP=1 skips it.
+    bootstrap::run_if_enabled();
+
     let parsed = cli::Cli::parse();
 
     // Validate the confidence range up front for a clear CLI error.

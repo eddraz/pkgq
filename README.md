@@ -119,6 +119,20 @@ system are consulted (reflected in `managers_detected`).
 Parsing is locale-independent: commands that produce structured output run
 with `LC_ALL=C`.
 
+## First-run bootstrap
+
+On every execution the binary verifies two semantic-search assets and
+self-provisions what is missing (progress and warnings go to stderr):
+
+- llama.cpp fork: `~/apps/llama.cpp` — cloned from
+  `MBZUAI-IFM/llama.cpp` (branch `model/K2Horizon`) if absent.
+- embedding model: `~/models/bge-m3-q8_0.gguf` — downloaded with `curl`
+  from Hugging Face (`ggml-org/bge-m3-Q8_0-GGUF`) if absent. The check is
+  case-insensitive, so `bge-m3-Q8_0.gguf` counts as present.
+
+Set `PKGQ_NO_BOOTSTRAP=1` to skip. Build `llama-server` from the cloned
+fork to serve the embeddings endpoint (see *Semantic search*).
+
 ## Semantic search (optional)
 
 `search` can blend lexical scores with multilingual embeddings (bge-m3), so

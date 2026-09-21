@@ -1,0 +1,156 @@
+//! First-run bootstrap: ensures the semantic-search assets exist —
+//! the llama.cpp fork (branch `model/K2Horizon`) in `~/apps/llama.cpp` and
+//! the bge-m3 embedding model in `~/models/`.
+//!
+//! Runs on every binary execution: verification is two filesystem checks;
+//! the (potentially slow) clone or download only happens when something is
+//! missing. Set `PKGQ_NO_BOOTSTRAP=1` to skip entirely.
+
+use std::path::{Path, PathBuf};
+
+use crate::shell;
+
+pub const LLAMA_CPP_URL: &str = "https://github.com/MBZUAI-IFM/llama.cpp.git";
+pub const LLAMA_CPP_BRANCH: &str = "model/K2Horizon";
+pub const MODEL_FILE_NAME: &str = "bge-m3-q8_0.gguf";
+pub const MODEL_URL: &str =
+    "https://huggingface.co/ggml-org/bge-m3-Q8_0-GGUF/resolve/main/bge-m3-q8_0.gguf?download=true";
+
+fn home_dir() -> PathBuf {
+    PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()))
+}
+
+fn llama_dir(home: &Path) -> PathBuf {
+    home.join("apps").join("llama.cpp")
+}
+
+fn models_dir(home: &Path) -> PathBuf {
+    home.join("models")
+}
+
+fn model_path(home: &Path) -> PathBuf {
+    models_dir(home).join(MODEL_FILE_NAME)
+}
+
+/// Whether the llama.cpp fork is present (its `.git` directory exists).
+fn llama_cpp_present(home: &Path) -> bool {
+    llama_dir(home).join(".git").is_dir()
+}
+
+/// Whether the model file exists in `~/models`, matching the expected file
+/// name case-insensitively (`bge-m3-q8_0.gguf` / `bge-m3-Q8_0.gguf`).
+fn model_present(home: &Path) -> bool {
+    models_dir(home)
+        .read_dir()
+        .map(|entries| {
+            entries.filter_map(std::result::Result::ok).any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(MODEL_FILE_NAME)
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Ensure both assets exist, cloning/downloading what is missing. Returns
+/// human-readable progress messages for stderr; the command never fails
+/// because of the bootstrap (warnings only).
+pub fn ensure(home: &Path) -> Vec<String> {
+    let mut messages: Vec<String> = Vec::new();
+
+    if !llama_cpp_present(home) {
+        let target = llama_dir(home);
+        messages.push(format!(
+            "bootstrap: cloning llama.cpp (branch {}) into {} ...",
+            LLAMA_CPP_BRANCH,
+            target.display()
+        ));
+        let _ = std::fs::create_dir_all(home.join("apps"));
+        let cmd = format!(
+            "git clone --single-branch --branch {} {} {}",
+            shell::quote(LLAMA_CPP_BRANCH),
+            shell::quote(LLAMA_CPP_URL),
+            shell::quote(&target.to_string_lossy())
+        );
+        match shell::run(&cmd) {
+            Ok(_) => messages.push(format!("llama.cpp cloned into {}", target.display())),
+            Err(e) => messages.push(format!(
+                "WARNING: llama.cpp clone failed ({}); semantic search setup incomplete",
+                e
+            )),
+        }
+    }
+
+    if !model_present(home) {
+        let target = model_path(home);
+        messages.push(format!(
+            "bootstrap: downloading bge-m3 model into {} ...",
+            target.display()
+        ));
+        let cmd = format!(
+            "curl -fL --create-dirs -o {} {}",
+            shell::quote(&target.to_string_lossy()),
+            shell::quote(MODEL_URL)
+        );
+        match shell::run(&cmd) {
+            Ok(_) => messages.push(format!("model saved to {}", target.display())),
+            Err(e) => messages.push(format!(
+                "WARNING: model download failed ({}); semantic search setup incomplete",
+                e
+            )),
+        }
+    }
+
+    messages
+}
+
+/// Entry point called at the start of every binary execution. Prints
+/// progress/warnings to stderr; never fails the command.
+pub fn run_if_enabled() {
+    if std::env::var("PKGQ_NO_BOOTSTRAP")
+        .map(|value| value == "1")
+        .unwrap_or(false)
+    {
+        return;
+    }
+    let home = home_dir();
+    for message in ensure(&home) {
+        eprintln!("pkgq: {message}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paths_live_under_home() {
+        let home = Path::new("/home/tester");
+        assert_eq!(
+            llama_dir(home),
+            PathBuf::from("/home/tester/apps/llama.cpp")
+        );
+        assert_eq!(
+            model_path(home),
+            PathBuf::from("/home/tester/models/bge-m3-q8_0.gguf")
+        );
+    }
+
+    #[test]
+    fn model_detection_is_case_insensitive() {
+        let base = std::env::temp_dir().join(format!("pkgq-bootstrap-{}", std::process::id()));
+        let models = models_dir(&base);
+        std::fs::create_dir_all(&models).unwrap();
+        assert!(!model_present(&base));
+        std::fs::write(models.join("bge-m3-Q8_0.gguf"), b"x").unwrap();
+        assert!(model_present(&base));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn missing_models_dir_is_not_present() {
+        let base = std::env::temp_dir().join(format!("pkgq-bootstrap-none-{}", std::process::id()));
+        assert!(!model_present(&base));
+    }
+}
