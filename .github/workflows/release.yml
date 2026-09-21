@@ -3,6 +3,11 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Exact existing tag to build (e.g. v0.1.1)"
+        required: true
 
 permissions:
   contents: write
@@ -31,9 +36,17 @@ jobs:
             target: aarch64-apple-darwin
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Dispatch builds always check out the remote tag, never a branch.
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
       - name: Derive version from tag
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+        run: |
+          ref="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            ref="${{ inputs.tag }}"
+          fi
+          echo "VERSION=${ref#v}" >> "$GITHUB_ENV"
 
       - name: Install cross linker (linux-aarch64)
         if: matrix.apt_packages
@@ -61,4 +74,6 @@ jobs:
           # release ships without assets (fail_on_unmatched_files
           # guards against that ever being silent again).
           files: pkgq-${{ env.VERSION }}-${{ matrix.target }}.tar.gz
+          # On workflow_dispatch GITHUB_REF_NAME is the branch, not the tag.
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           fail_on_unmatched_files: true
