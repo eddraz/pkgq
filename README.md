@@ -160,14 +160,23 @@ Configuration: `PKGQ_EMBED_URL` (default
 `http://127.0.0.1:8080/v1/embeddings`) and `PKGQ_EMBED_MODEL` (default
 `bge-m3`).
 
-## Build
+## Install
+
+### From source
 
 ```bash
-cargo build --release
-# binary at target/release/pkgq
+git clone https://github.com/eddraz/pkgq && cd pkgq
+cargo install --path .
 ```
 
-Requires Rust 1.x with the 2021 edition. Tests: `cargo test`.
+### Prebuilt binaries (Linux x86_64/aarch64, macOS Intel/Apple Silicon)
+
+Grab a tarball from [Releases](https://github.com/eddraz/pkgq/releases/latest):
+
+```bash
+curl -LO https://github.com/eddraz/pkgq/releases/latest/download/pkgq-linux-x86_64.tar.gz
+tar xzf pkgq-linux-x86_64.tar.gz && sudo mv pkgq /usr/local/bin/
+```
 
 ## Design notes
 
