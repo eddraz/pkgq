@@ -1,9 +1,15 @@
 [package]
 name = "pkgq"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
-description = "Inventory and search OS applications across package managers, outputting JSON"
+description = "Inventory and search OS applications across package managers (apt, dpkg, flatpak, snap, brew, pacman, dnf) as JSON"
 license = "MIT"
+repository = "https://github.com/eddraz/pkgq"
+homepage = "https://github.com/eddraz/pkgq"
+readme = "README.md"
+keywords = ["cli", "packages", "inventory", "apt", "flatpak"]
+categories = ["command-line-utilities", "os"]
+exclude = ["odd", ".github", ".serena", ".codegraph", ".atl"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
