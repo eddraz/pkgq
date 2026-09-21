@@ -92,6 +92,11 @@ Field notes:
   derivable (rpm) and the manager-reported string otherwise (pacman).
 - `available_version` — newer version for an installed app; only filled by
   the `outdated` command.
+- `matched_tokens` — which query tokens matched this app (including
+  synonyms); empty means it matched semantically, not lexically.
+- `confidence` — relevance in [0, 1]: how much of the query this result
+  covers (tokens matched, name/phrase hits, semantic similarity). Only
+  filled by `search`; results are sorted by it, best first.
 - `errors[].manager` / `errors[].message` — manager-level failures.
 - Results are sorted deterministically by name, then manager.
 
