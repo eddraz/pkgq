@@ -1,6 +1,6 @@
 [package]
 name = "pkgq"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 description = "Inventory and search OS applications across package managers (apt, dpkg, flatpak, snap, brew, pacman, dnf) as JSON"
 license = "MIT"
