@@ -55,4 +55,10 @@ jobs:
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: pkgq-$VERSION-${{ matrix.target }}.tar.gz
+          # $VERSION is a GITHUB_ENV variable: `with:` inputs are not
+          # shell-expanded, so the version must be interpolated as an
+          # Actions expression or the glob matches nothing and the
+          # release ships without assets (fail_on_unmatched_files
+          # guards against that ever being silent again).
+          files: pkgq-${{ env.VERSION }}-${{ matrix.target }}.tar.gz
+          fail_on_unmatched_files: true
