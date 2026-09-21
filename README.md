@@ -14,6 +14,7 @@ Primary target: Debian Linux. Other managers are supported opportunistically
 pkgq list [--manager m1,m2] [--compact]
 pkgq search <query> [--manager m1,m2] [--compact] [--installed-only] [--available-only]
 pkgq outdated [--manager m1,m2] [--compact]
+pkgq search <query> [--min-confidence 0..1]  # cuts the weak tail
 ```
 
 - `list` — every application currently installed on the system.

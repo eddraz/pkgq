@@ -18,6 +18,15 @@ use serde::Serialize;
 
 fn main() -> ExitCode {
     let parsed = cli::Cli::parse();
+
+    // Validate the confidence range up front for a clear CLI error.
+    if let cli::Command::Search { min_confidence, .. } = &parsed.command {
+        if !(0.0..=1.0).contains(min_confidence) {
+            eprintln!("pkgq: --min-confidence must be between 0 and 1");
+            return ExitCode::from(2);
+        }
+    }
+
     let selected = parsed.command.selected_managers();
 
     let serialization: Result<serde_json::Value, serde_json::Error> = match &parsed.command {
@@ -29,6 +38,7 @@ fn main() -> ExitCode {
             query,
             installed_only,
             available_only,
+            min_confidence,
             ..
         } => serde_json::to_value(run::run_search(
             query,
@@ -36,6 +46,7 @@ fn main() -> ExitCode {
             run::SearchFilters {
                 installed_only: *installed_only,
                 available_only: *available_only,
+                min_confidence: *min_confidence,
             },
         )),
         cli::Command::Index { manager, .. } => {

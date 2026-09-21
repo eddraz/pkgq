@@ -92,6 +92,9 @@ pub enum Command {
         /// Keep only applications that are not installed.
         #[arg(long)]
         available_only: bool,
+        /// Drop results with confidence below this value (0..1).
+        #[arg(long, default_value_t = 0.0)]
+        min_confidence: f64,
     },
 }
 

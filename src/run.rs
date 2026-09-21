@@ -9,6 +9,8 @@ use crate::timefmt;
 pub struct SearchFilters {
     pub installed_only: bool,
     pub available_only: bool,
+    /// Drop results whose confidence is below this value (0..1).
+    pub min_confidence: f64,
 }
 
 /// Run `list` over every detected (optionally filtered) manager.
@@ -240,6 +242,8 @@ pub fn run_over(
                     .unwrap_or(std::cmp::Ordering::Equal)
                     .then_with(|| (&app_a.name, app_a.manager).cmp(&(&app_b.name, app_b.manager)))
             });
+            // Min-confidence cut: drop the weak tail of the recall expansion.
+            enriched.retain(|(confidence, _)| *confidence >= filters.min_confidence);
             results.extend(enriched.into_iter().map(|(_, app)| app));
         } else {
             results.extend(scored.into_iter().map(|(_, _, app)| app));
@@ -397,6 +401,7 @@ mod tests {
             SearchFilters {
                 installed_only: true,
                 available_only: false,
+                min_confidence: 0.0,
             },
         );
         assert_eq!(installed.count, 1);
@@ -412,10 +417,47 @@ mod tests {
             SearchFilters {
                 installed_only: false,
                 available_only: true,
+                min_confidence: 0.0,
             },
         );
         assert_eq!(available.count, 1);
         assert!(available.results.iter().all(|a| !a.installed));
+    }
+
+    #[test]
+    fn min_confidence_cuts_the_weak_tail() {
+        let mut strong = app("zz", ManagerKind::Dpkg, true);
+        strong.description = Some("a zz helper".into()); // name word hit
+        let mut weak = app("qqq", ManagerKind::Dpkg, true);
+        weak.description = Some("mentions zz inside".into()); // description word hit only
+        let reg: Vec<Box<dyn Provider>> = vec![
+            Box::new(FakeProvider {
+                kind: ManagerKind::Dpkg,
+                available: true,
+                apps: vec![strong],
+                fail: false,
+            }),
+            Box::new(FakeProvider {
+                kind: ManagerKind::Dpkg,
+                available: true,
+                apps: vec![weak],
+                fail: false,
+            }),
+        ];
+        let out = run_over(
+            &reg,
+            "search",
+            Some("zz"),
+            None,
+            SearchFilters {
+                min_confidence: 0.3,
+                ..SearchFilters::default()
+            },
+        );
+        // Strong: name word hit (50/50 = 1.0). Weak: description-only (10/50
+        // = 0.2) falls below the cut.
+        assert_eq!(out.count, 1);
+        assert_eq!(out.results[0].name, "zz");
     }
 
     #[test]
@@ -469,6 +511,7 @@ mod tests {
             SearchFilters {
                 installed_only: true,
                 available_only: false,
+                min_confidence: 0.0,
             },
         );
         assert_eq!(out.count, 1);
