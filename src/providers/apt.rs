@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use crate::model::{App, ManagerError, ManagerKind};
-use crate::provider::Provider;
+use crate::provider::{query_tokens, Provider};
 use crate::providers::dpkg;
 use crate::shell;
 
@@ -210,9 +210,15 @@ impl Provider for Apt {
     }
 
     fn search(&self, query: &str) -> Result<Vec<App>, ManagerError> {
+        // Catalog queries use the expanded tokens (stopwords/synonyms applied)
+        // so managers' own AND matching sees meaningful terms only.
+        let tokens = query_tokens(query);
+        if tokens.is_empty() {
+            return Ok(Vec::new());
+        }
         let cmd = format!(
             "LC_ALL=C apt-cache search {} 2>/dev/null || true",
-            shell::quote(query)
+            shell::quote(&tokens.join(" "))
         );
         let hits = parse_search_output(&shell::run_managed(ManagerKind::Apt, &cmd)?);
         if hits.is_empty() {

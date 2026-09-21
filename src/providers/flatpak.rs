@@ -127,7 +127,7 @@ impl Provider for Flatpak {
             .collect();
         let cmd = format!(
             "LC_ALL=C flatpak search {} {SEARCH_COLUMNS} 2>/dev/null || true",
-            shell::quote(query)
+            shell::quote(&tokens.join(" "))
         );
         let output = shell::run_managed(ManagerKind::Flatpak, &cmd)?;
         let catalog: Vec<App> = parse_columns_output(&output)

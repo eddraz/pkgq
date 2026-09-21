@@ -243,7 +243,7 @@ impl Provider for Snap {
             .collect();
         let cmd = format!(
             "LC_ALL=C snap find {} 2>/dev/null || true",
-            shell::quote(query)
+            shell::quote(&tokens.join(" "))
         );
         let output = shell::run_managed(ManagerKind::Snap, &cmd)?;
         let catalog: Vec<App> = parse_snap_find(&output)

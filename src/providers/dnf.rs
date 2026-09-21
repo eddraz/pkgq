@@ -203,7 +203,7 @@ impl Provider for Dnf {
             .collect();
         let cmd = format!(
             "LC_ALL=C dnf search {} 2>/dev/null || true",
-            shell::quote(query)
+            shell::quote(&tokens.join(" "))
         );
         let output = shell::run_managed(ManagerKind::Dnf, &cmd)?;
         let hits = parse_dnf_search(&output);

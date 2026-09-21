@@ -242,7 +242,7 @@ impl Provider for Brew {
             .collect();
         let cmd = format!(
             "LC_ALL=C brew search {} 2>/dev/null || true",
-            shell::quote(query)
+            shell::quote(&tokens.join(" "))
         );
         let output = shell::run_managed(ManagerKind::Brew, &cmd)?;
         let names = parse_search_output(&output);

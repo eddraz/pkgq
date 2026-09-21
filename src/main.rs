@@ -4,6 +4,7 @@ mod cli;
 mod model;
 mod provider;
 mod providers;
+mod query;
 mod run;
 mod shell;
 mod timefmt;

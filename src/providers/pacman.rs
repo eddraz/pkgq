@@ -286,7 +286,7 @@ impl Provider for Pacman {
             .collect();
         let cmd = format!(
             "LC_ALL=C pacman -Ss {} 2>/dev/null || true",
-            shell::quote(query)
+            shell::quote(&tokens.join(" "))
         );
         let output = shell::run_managed(ManagerKind::Pacman, &cmd)?;
         let catalog: Vec<App> = parse_sync_search(&output)

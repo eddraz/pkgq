@@ -84,33 +84,45 @@ pub(crate) fn relevance_score(name: &str, description: Option<&str>, tokens: &[S
     let description_lower = description.unwrap_or("").to_lowercase();
     let mut score: i64 = 0;
     for token in tokens {
+        // Very short tokens (c, r, de) only score on word boundaries; as
+        // substrings they match half the English language.
+        let substring_scores = token.chars().count() > 2;
         if contains_word(&name_lower, token) {
             score += 50;
-        } else if name_lower.contains(token) {
+        } else if substring_scores && name_lower.contains(token) {
             score += 25;
         }
         if contains_word(&description_lower, token) {
             score += 10;
-        } else if description_lower.contains(token) {
+        } else if substring_scores && description_lower.contains(token) {
             score += 3;
         }
     }
+    // Phrase bonuses accept both token orders: "editor de video" (ES token
+    // order) must also match the English collocation "video editor".
     let phrase = tokens.join(" ");
-    if name_lower == phrase {
+    let phrase_reversed = tokens.iter().rev().cloned().collect::<Vec<_>>().join(" ");
+    if name_lower == phrase || name_lower == phrase_reversed {
         score += 200;
-    } else if !phrase.is_empty() && name_lower.contains(&phrase) {
+    } else if !phrase.is_empty()
+        && (name_lower.contains(&phrase) || name_lower.contains(&phrase_reversed))
+    {
         score += 80;
+    } else if !phrase.is_empty()
+        && (contains_word(&description_lower, &phrase)
+            || contains_word(&description_lower, &phrase_reversed))
+    {
+        // A full-phrase description hit ("non-linear video editor") marks the
+        // app the query is actually about; keep it close to name matches.
+        score += 40;
     }
     score
 }
 
-/// Split a user query into lowercase tokens for AND matching.
+/// Normalize a query into scored tokens (accent-folded, stopwords removed,
+/// ES→EN synonyms expanded). See [`crate::query::expand_query`].
 pub(crate) fn query_tokens(query: &str) -> Vec<String> {
-    query
-        .split_whitespace()
-        .map(str::to_lowercase)
-        .filter(|token| !token.is_empty())
-        .collect()
+    crate::query::expand_query(query)
 }
 
 /// Permissive candidate gate: true when at least one token appears
@@ -256,6 +268,20 @@ mod tests {
         assert!(both_tokens > one_token);
         assert!(one_token > 0);
         assert_eq!(relevance_score("zzz", None, &[]), 0);
+    }
+
+    #[test]
+    fn relevance_accepts_reversed_phrase_order_for_multilingual_queries() {
+        // "editor de video" expands to [editor, video]; English descriptions
+        // say "video editor". The reversed phrase must score in descriptions.
+        let tokens = query_tokens("editor de video");
+        let editor = relevance_score("kdenlive", Some("non-linear video editor"), &tokens);
+        let driver = relevance_score(
+            "xserver-xorg-video-all",
+            Some("X.Org X server -- output driver metapackage"),
+            &tokens,
+        );
+        assert!(editor > driver);
     }
 
     #[test]
