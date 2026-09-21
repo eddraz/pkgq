@@ -16,7 +16,7 @@ use crate::model::{ManagerError, ManagerKind};
 use crate::run;
 use crate::shell;
 
-const DEFAULT_EMBED_URL: &str = "http://127.0.0.1:8080/v1/embeddings";
+const DEFAULT_EMBED_URL: &str = "http://127.0.0.1:28488/v1/embeddings";
 const DEFAULT_EMBED_MODEL: &str = "bge-m3";
 const BATCH_SIZE: usize = 16;
 const EMBED_TIMEOUT_SECS: u64 = 120;

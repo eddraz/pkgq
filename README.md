@@ -142,7 +142,7 @@ finds a video editor even when no token matches.
 Requirements: `llama-server` from llama.cpp and an embedding GGUF, e.g.
 
 ```bash
-llama-server -m ~/models/bge-m3-Q8_0.gguf --embeddings --port 8080
+llama-server -m ~/models/bge-m3-Q8_0.gguf --embeddings --port 28488
 ```
 
 Then build the index once (re-run after installing/removing apps):
@@ -157,7 +157,7 @@ reachable, `search` blends semantic similarity (0.6) with the lexical score
 there is no index, `search` silently falls back to lexical-only.
 
 Configuration: `PKGQ_EMBED_URL` (default
-`http://127.0.0.1:8080/v1/embeddings`) and `PKGQ_EMBED_MODEL` (default
+`http://127.0.0.1:28488/v1/embeddings`) and `PKGQ_EMBED_MODEL` (default
 `bge-m3`).
 
 ## Install
