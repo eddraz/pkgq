@@ -64,8 +64,8 @@ pub enum Command {
         #[arg(long)]
         compact: bool,
     },
-    /// Build the optional semantic index used to improve search. Requires a
-    /// local llama-server serving an embedding model (e.g. bge-m3).
+    /// Build the optional semantic index used to improve search. Uses the
+    /// native candle bge-m3 embedding engine (CPU, pure Rust).
     Index {
         /// Only index these comma-separated managers
         /// (apt,dpkg,flatpak,snap,brew,pacman,dnf).
