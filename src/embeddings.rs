@@ -11,7 +11,7 @@ use candle_nn::VarBuilder;
 use candle_transformers::models::xlm_roberta::Config as XlmRobertaConfig;
 use candle_transformers::models::xlm_roberta::XLMRobertaModel;
 use hf_hub::api::sync::ApiBuilder;
-use tokenizers::tokenizer::{PaddingParams, TruncationParams, Tokenizer};
+use tokenizers::tokenizer::{PaddingParams, Tokenizer, TruncationParams};
 
 /// Stable identifier for this embedding backend.  Written into the semantic
 /// index so that old indexes (e.g. llama-server indexes without this field)
@@ -180,7 +180,11 @@ pub fn embed_texts(texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
             .encode_batch(inputs, true)
             .map_err(|e| format!("tokenization failed: {e}"))?;
 
-        let max_len = encodings.iter().map(|encoding| encoding.len()).max().unwrap_or(0);
+        let max_len = encodings
+            .iter()
+            .map(|encoding| encoding.len())
+            .max()
+            .unwrap_or(0);
         let batch = encodings.len();
 
         let mut input_ids = Vec::with_capacity(batch * max_len);
@@ -207,7 +211,14 @@ pub fn embed_texts(texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
             .map_err(|e| format!("failed to build token type ids: {e}"))?;
 
         let output = model
-            .forward(&input_ids, &attention_mask, &token_type_ids, None, None, None)
+            .forward(
+                &input_ids,
+                &attention_mask,
+                &token_type_ids,
+                None,
+                None,
+                None,
+            )
             .map_err(|e| format!("model forward failed: {e}"))?;
 
         // CLS pooling: first token of every sequence.
@@ -259,9 +270,7 @@ pub fn prewarm_cache() -> Vec<String> {
         return messages;
     }
 
-    messages.push(format!(
-        "bootstrap: prewarming HF cache for {repo_id} ..."
-    ));
+    messages.push(format!("bootstrap: prewarming HF cache for {repo_id} ..."));
 
     let cache_dir = hf_cache_dir();
     let api = match ApiBuilder::new()
