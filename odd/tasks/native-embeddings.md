@@ -1,6 +1,6 @@
 # Feature: native-embeddings (candle bge-m3, in-process)
 
-Status: implemented on feat/native-embeddings — pending user merge decision
+Status: merged to master (PR #2)
 
 ## Goal
 
