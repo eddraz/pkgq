@@ -84,10 +84,10 @@ pub fn fetch_latest_release() -> Result<serde_json::Value, String> {
         shell::quote("Accept: application/vnd.github+json")
     );
 
-    let stdout = shell::run(&command).map_err(|e| format!("failed to fetch latest release: {e}"))?;
+    let stdout =
+        shell::run(&command).map_err(|e| format!("failed to fetch latest release: {e}"))?;
 
-    serde_json::from_str(&stdout)
-        .map_err(|e| format!("failed to parse GitHub release JSON: {e}"))
+    serde_json::from_str(&stdout).map_err(|e| format!("failed to parse GitHub release JSON: {e}"))
 }
 
 /// Strip a leading 'v' from a tag name to get the plain version.
@@ -179,13 +179,11 @@ pub fn download_and_replace(url: &str) -> Result<PathBuf, String> {
         .ok_or("extracted archive does not contain a 'pkgq' binary")?;
 
     let new_path = current_exe.with_extension("new");
-    fs::copy(&extracted, &new_path)
-        .map_err(|e| map_replace_error(&current_exe, e))?;
+    fs::copy(&extracted, &new_path).map_err(|e| map_replace_error(&current_exe, e))?;
 
     copy_permissions(&current_exe, &new_path)?;
 
-    fs::rename(&new_path, &current_exe)
-        .map_err(|e| map_replace_error(&current_exe, e))?;
+    fs::rename(&new_path, &current_exe).map_err(|e| map_replace_error(&current_exe, e))?;
 
     Ok(current_exe)
 }

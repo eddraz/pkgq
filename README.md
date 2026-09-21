@@ -14,6 +14,7 @@ Primary target: Debian Linux. Other managers are supported opportunistically
 pkgq list [--manager m1,m2] [--compact]
 pkgq search <query> [--manager m1,m2] [--compact] [--installed-only] [--available-only]
 pkgq outdated [--manager m1,m2] [--compact]
+pkgq index [--manager m1,m2] [--compact]   # rebuild the semantic index
 pkgq search <query> [--min-confidence 0..1]  # cuts the weak tail
 ```
 
@@ -68,7 +69,9 @@ pkgq search <query> [--min-confidence 0..1]  # cuts the weak tail
       "section": "web",
       "depends": "libcurl4t64 (= 8.21.0-2~bpo13+1), libc6 (>= 2.34), zlib1g (>= 1:1.1.4)",
       "install_date": null,
-      "available_version": null
+      "available_version": null,
+      "matched_tokens": ["curl"],
+      "confidence": 0.98
     }
   ],
   "errors": []
@@ -182,11 +185,15 @@ cargo install --path .
 
 ### Prebuilt binaries (Linux x86_64/aarch64, macOS Intel/Apple Silicon)
 
-Grab a tarball from [Releases](https://github.com/eddraz/pkgq/releases/latest):
+Grab a tarball from [Releases](https://github.com/eddraz/pkgq/releases/latest).
+Assets are named `pkgq-<version>-<target>.tar.gz` (for example
+`pkgq-0.1.1-x86_64-unknown-linux-gnu.tar.gz`):
 
 ```bash
-curl -LO https://github.com/eddraz/pkgq/releases/latest/download/pkgq-linux-x86_64.tar.gz
-tar xzf pkgq-linux-x86_64.tar.gz && sudo mv pkgq /usr/local/bin/
+VERSION=0.1.1   # check the latest release tag
+TARGET=x86_64-unknown-linux-gnu   # or aarch64-unknown-linux-gnu, x86_64-apple-darwin, aarch64-apple-darwin
+curl -LO "https://github.com/eddraz/pkgq/releases/download/v${VERSION}/pkgq-${VERSION}-${TARGET}.tar.gz"
+tar xzf "pkgq-${VERSION}-${TARGET}.tar.gz" && sudo mv pkgq /usr/local/bin/
 ```
 
 ## Self-update
