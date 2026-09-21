@@ -48,12 +48,11 @@ jobs:
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.cross_linker }}
 
-      - name: Package (tar.gz)
+      - name: Package (tar.gz + sha256)
         run: |
           cd "target/${{ matrix.target }}/release"
           tar czf "../../../${{ matrix.artifact }}.tar.gz" pkgq
-          cd ../../../../
-          shasum -a 256 "${{ matrix.artifact }}.tar.gz" > "${{ matrix.artifact }}.tar.gz.sha256"
+          shasum -a 256 "../../../${{ matrix.artifact }}.tar.gz" > "../../../${{ matrix.artifact }}.tar.gz.sha256"
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
