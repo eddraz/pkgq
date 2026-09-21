@@ -189,6 +189,19 @@ curl -LO https://github.com/eddraz/pkgq/releases/latest/download/pkgq-linux-x86_
 tar xzf pkgq-linux-x86_64.tar.gz && sudo mv pkgq /usr/local/bin/
 ```
 
+## Self-update
+
+```bash
+pkgq update [--compact]
+```
+
+`update` checks GitHub Releases for a newer version and replaces the running
+binary with the matching tarball for the current platform. It reports JSON
+and exits `0` on success or when already up to date. Replacing the binary
+requires write permission on the install location; if the directory is not
+writable, the command returns a permission-denied error and suggests using
+`sudo` or installing to a writable location.
+
 ## Design notes
 
 - **bash-only execution** — a single shell adapter wraps `bash -c`; no direct

@@ -11,6 +11,7 @@ mod run;
 mod semantic;
 mod shell;
 mod timefmt;
+mod update;
 
 use std::io::{self, Write};
 use std::process::ExitCode;
@@ -81,6 +82,13 @@ fn main() -> ExitCode {
                 })),
             }
         }
+        cli::Command::Update { .. } => match update::run_update() {
+            Ok(report) => Ok(report),
+            Err(report) => {
+                let _ = print_json(&report, parsed.command.wants_compact());
+                return ExitCode::FAILURE;
+            }
+        },
     };
 
     match serialization {
