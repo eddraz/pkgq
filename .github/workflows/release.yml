@@ -18,23 +18,22 @@ jobs:
           - name: linux-x86_64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: pkgq-linux-x86_64
           - name: linux-aarch64
             os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
-            artifact: pkgq-linux-aarch64
             cross_linker: aarch64-linux-gnu-gcc
             apt_packages: gcc-aarch64-linux-gnu
           - name: macos-x86_64
             os: macos-15-intel
             target: x86_64-apple-darwin
-            artifact: pkgq-macos-x86_64
           - name: macos-aarch64
             os: macos-14
             target: aarch64-apple-darwin
-            artifact: pkgq-macos-aarch64
     steps:
       - uses: actions/checkout@v4
+
+      - name: Derive version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
       - name: Install cross linker (linux-aarch64)
         if: matrix.apt_packages
@@ -48,15 +47,12 @@ jobs:
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.cross_linker }}
 
-      - name: Package (tar.gz + sha256)
+      - name: Package (tar.gz)
         run: |
           cd "target/${{ matrix.target }}/release"
-          tar czf "../../../${{ matrix.artifact }}.tar.gz" pkgq
-          shasum -a 256 "../../../${{ matrix.artifact }}.tar.gz" > "../../../${{ matrix.artifact }}.tar.gz.sha256"
+          tar czf "../../../pkgq-$VERSION-${{ matrix.target }}.tar.gz" pkgq
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            ${{ matrix.artifact }}.tar.gz
-            ${{ matrix.artifact }}.tar.gz.sha256
+          files: pkgq-$VERSION-${{ matrix.target }}.tar.gz
