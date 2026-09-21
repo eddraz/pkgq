@@ -16,6 +16,16 @@ clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Native in-process embedding engine (candle + HF ecosystem).
+# CPU-only, no CUDA/Metal features.
+candle-core = "0.9.2"
+candle-nn = "0.9.2"
+candle-transformers = "0.9.2"
+# `tokenizers` without the default `onig` C regex backend; `fancy-regex` is pure Rust.
+tokenizers = { version = "0.21.4", default-features = false, features = ["fancy-regex"] }
+# `hf-hub` sync/downloader path backed by `ureq` (rustls TLS, pure Rust).
+hf-hub = { version = "0.4.3", default-features = false, features = ["ureq"] }
+
 [profile.release]
 lto = true
 strip = true

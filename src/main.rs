@@ -2,6 +2,7 @@
 
 mod bootstrap;
 mod cli;
+mod embeddings;
 mod model;
 mod provider;
 mod providers;
@@ -18,9 +19,10 @@ use clap::Parser as _;
 use serde::Serialize;
 
 fn main() -> ExitCode {
-    // Bootstrap the semantic-search assets (llama.cpp fork + bge-m3 model)
-    // on every execution; verification is two cheap filesystem checks and
-    // anything missing is cloned/downloaded. PKGQ_NO_BOOTSTRAP=1 skips it.
+    // Bootstrap the semantic-search assets (bge-m3 weights + tokenizer in
+    // the Hugging Face cache) on every execution; verification is a cheap
+    // filesystem scan and anything missing is downloaded. PKGQ_NO_BOOTSTRAP=1
+    // skips it.
     bootstrap::run_if_enabled();
 
     let parsed = cli::Cli::parse();

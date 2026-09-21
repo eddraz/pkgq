@@ -121,17 +121,17 @@ with `LC_ALL=C`.
 
 ## First-run bootstrap
 
-On every execution the binary verifies two semantic-search assets and
-self-provisions what is missing (progress and warnings go to stderr):
+On every execution the binary verifies that the native embedding assets are
+present in the Hugging Face cache and self-provisions what is missing
+(progress and warnings go to stderr):
 
-- llama.cpp fork: `~/apps/llama.cpp` — cloned from
-  `MBZUAI-IFM/llama.cpp` (branch `model/K2Horizon`) if absent.
-- embedding model: `~/models/bge-m3-q8_0.gguf` — downloaded with `curl`
-  from Hugging Face (`ggml-org/bge-m3-Q8_0-GGUF`) if absent. The check is
-  case-insensitive, so `bge-m3-Q8_0.gguf` counts as present.
+- `model.safetensors` and `tokenizer.json` from the configured repo
+  (default `BAAI/bge-m3`) are downloaded once if they are not cached.
+- The first download is about **2.3 GB**; after that every run is a cheap
+  local filesystem check.
 
-Set `PKGQ_NO_BOOTSTRAP=1` to skip. Build `llama-server` from the cloned
-fork to serve the embeddings endpoint (see *Semantic search*).
+Set `PKGQ_NO_BOOTSTRAP=1` to skip.  Use `PKGQ_EMBED_MODEL_REPO` to point to
+a compatible XLM-RoBERTa model (same safetensors/tokenizer layout).
 
 ## Semantic search (optional)
 
@@ -139,26 +139,37 @@ fork to serve the embeddings endpoint (see *Semantic search*).
 queries in any language find what they mean — `programa para editar peliculas`
 finds a video editor even when no token matches.
 
-Requirements: `llama-server` from llama.cpp and an embedding GGUF, e.g.
+The embedding engine is now **native, pure Rust, and in-process** (candle +
+XLM-RoBERTa).  No `llama-server`, no GGUF, no extra server to start.
 
-```bash
-llama-server -m ~/models/bge-m3-Q8_0.gguf --embeddings --port 8080
-```
-
-Then build the index once (re-run after installing/removing apps):
+Build the index once (re-run after installing/removing apps):
 
 ```bash
 pkgq index [--manager m1,m2]
 ```
 
-The index is cached at `~/.cache/pkgq/index.json`. While the server is
-reachable, `search` blends semantic similarity (0.6) with the lexical score
-(0.4) and rescues indexed apps the tokens missed; if the server is down or
-there is no index, `search` silently falls back to lexical-only.
+The index is cached at `~/.cache/pkgq/index.json`.  `search` blends semantic
+similarity (0.6) with the lexical score (0.4) and rescues indexed apps the
+tokens missed when the index is present and was built by the current engine;
+otherwise it silently falls back to lexical-only.
 
-Configuration: `PKGQ_EMBED_URL` (default
-`http://127.0.0.1:8080/v1/embeddings`) and `PKGQ_EMBED_MODEL` (default
-`bge-m3`).
+**Cold-start expectations (CPU):**
+
+- `pkgq index` loads ~2.3 GB of weights once per invocation; expect several
+  seconds of startup before embeddings begin, plus time proportional to the
+  number of indexed packages.
+- `pkgq search` also loads the weights once per invocation to embed the query;
+  simple queries take a few seconds on a modern CPU.
+- Both commands are still fully offline after the first download.
+
+**Index compatibility:** indexes created by previous `llama-server` builds do
+not include the new `engine` field and are automatically ignored.  Re-run
+`pkgq index` to migrate.
+
+Configuration:
+
+- `PKGQ_NO_BOOTSTRAP=1` — skip the pre-run cache check/download.
+- `PKGQ_EMBED_MODEL_REPO` — override the model repo (default `BAAI/bge-m3`).
 
 ## Install
 
