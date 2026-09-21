@@ -112,25 +112,25 @@ pub(crate) fn score_with_matches(
             matched.push(token.clone());
         }
     }
-    let phrase = tokens.join(" ");
-    let phrase_reversed = tokens.iter().rev().cloned().collect::<Vec<_>>().join(" ");
-    if name_lower == phrase || name_lower == phrase_reversed {
-        score += 200;
-    } else if !phrase.is_empty()
-        && (name_lower.contains(&phrase) || name_lower.contains(&phrase_reversed))
-    {
-        score += 80;
-    } else if !phrase.is_empty()
-        && (contains_word(&description_lower, &phrase)
-            || contains_word(&description_lower, &phrase_reversed))
-    {
-        score += 40;
+    if tokens.len() >= 2 {
+        let phrase = tokens.join(" ");
+        let phrase_reversed = tokens.iter().rev().cloned().collect::<Vec<_>>().join(" ");
+        if name_lower == phrase || name_lower == phrase_reversed {
+            score += 200;
+        } else if !phrase.is_empty()
+            && (name_lower.contains(&phrase) || name_lower.contains(&phrase_reversed))
+        {
+            score += 80;
+        } else if !phrase.is_empty()
+            && (contains_word(&description_lower, &phrase)
+                || contains_word(&description_lower, &phrase_reversed))
+        {
+            score += 40;
+        }
     }
     (score, matched)
 }
 
-/// Relevance score of an application for a tokenized query. Every token hit
-/// adds points; name hits outweigh description hits and word-boundary hits
 /// Normalize a query into scored tokens (accent-folded, stopwords removed,
 /// ES→EN synonyms expanded). See [`crate::query::expand_query`].
 pub(crate) fn query_tokens(query: &str) -> Vec<String> {

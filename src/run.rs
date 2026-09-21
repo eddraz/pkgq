@@ -11,6 +11,9 @@ pub struct SearchFilters {
     pub available_only: bool,
     /// Drop results whose confidence is below this value (0..1).
     pub min_confidence: f64,
+    /// Blend semantic similarity into the confidence and re-rank. Defaults
+    /// to off in `Default` so unit tests stay hermetic.
+    pub semantic: bool,
 }
 
 /// Run `list` over every detected (optionally filtered) manager.
@@ -134,7 +137,7 @@ pub fn run_over(
     // Optional semantic layer (search only): load the index and embed the
     // query once. Used both to rescue indexed apps the lexical score rejected
     // (cross-language or synonym queries) and to re-rank the results.
-    let semantic_state = if command == "search" {
+    let semantic_state = if command == "search" && filters.semantic {
         query.and_then(|query| {
             let index = crate::semantic::load_index()?;
             let lookup = crate::semantic::embedding_lookup(&index);
@@ -396,12 +399,13 @@ mod tests {
         let installed = run_over(
             &reg,
             "search",
-            Some("zz"),
+            Some("zzz"),
             None,
             SearchFilters {
                 installed_only: true,
                 available_only: false,
                 min_confidence: 0.0,
+                semantic: false,
             },
         );
         assert_eq!(installed.count, 1);
@@ -412,12 +416,13 @@ mod tests {
         let available = run_over(
             &reg,
             "search",
-            Some("aa"),
+            Some("aaa"),
             None,
             SearchFilters {
                 installed_only: false,
                 available_only: true,
                 min_confidence: 0.0,
+                semantic: false,
             },
         );
         assert_eq!(available.count, 1);
@@ -456,6 +461,18 @@ mod tests {
         );
         // Strong: name word hit (50/50 = 1.0). Weak: description-only (10/50
         // = 0.2) falls below the cut.
+        let tokens = crate::query::expand_query("zz");
+        for r in &out.results {
+            eprintln!(
+                "DBG {} conf={:?} matched={:?} score={:?} desc={:?}",
+                r.name,
+                r.confidence,
+                r.matched_tokens,
+                crate::provider::score_with_matches(&r.name, r.description.as_deref(), &tokens),
+                r.description.as_deref().unwrap_or("<none>")
+            );
+        }
+        eprintln!("DBG count={}", out.count);
         assert_eq!(out.count, 1);
         assert_eq!(out.results[0].name, "zz");
     }
@@ -512,6 +529,7 @@ mod tests {
                 installed_only: true,
                 available_only: false,
                 min_confidence: 0.0,
+                semantic: false,
             },
         );
         assert_eq!(out.count, 1);

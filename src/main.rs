@@ -47,6 +47,7 @@ fn main() -> ExitCode {
                 installed_only: *installed_only,
                 available_only: *available_only,
                 min_confidence: *min_confidence,
+                semantic: true,
             },
         )),
         cli::Command::Index { manager, .. } => {
