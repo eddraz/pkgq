@@ -1,9 +1,9 @@
 //! Domain model: package-manager kinds, applications, and the JSON output contract.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Every package manager this tool knows how to talk to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ManagerKind {
     Apt,

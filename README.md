@@ -113,6 +113,33 @@ system are consulted (reflected in `managers_detected`).
 Parsing is locale-independent: commands that produce structured output run
 with `LC_ALL=C`.
 
+## Semantic search (optional)
+
+`search` can blend lexical scores with multilingual embeddings (bge-m3), so
+queries in any language find what they mean — `programa para editar peliculas`
+finds a video editor even when no token matches.
+
+Requirements: `llama-server` from llama.cpp and an embedding GGUF, e.g.
+
+```bash
+llama-server -m ~/models/bge-m3-Q8_0.gguf --embeddings --port 8080
+```
+
+Then build the index once (re-run after installing/removing apps):
+
+```bash
+pkgq index [--manager m1,m2]
+```
+
+The index is cached at `~/.cache/pkgq/index.json`. While the server is
+reachable, `search` blends semantic similarity (0.6) with the lexical score
+(0.4) and rescues indexed apps the tokens missed; if the server is down or
+there is no index, `search` silently falls back to lexical-only.
+
+Configuration: `PKGQ_EMBED_URL` (default
+`http://127.0.0.1:8080/v1/embeddings`) and `PKGQ_EMBED_MODEL` (default
+`bge-m3`).
+
 ## Build
 
 ```bash

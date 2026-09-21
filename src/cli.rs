@@ -64,6 +64,17 @@ pub enum Command {
         #[arg(long)]
         compact: bool,
     },
+    /// Build the optional semantic index used to improve search. Requires a
+    /// local llama-server serving an embedding model (e.g. bge-m3).
+    Index {
+        /// Only index these comma-separated managers
+        /// (apt,dpkg,flatpak,snap,brew,pacman,dnf).
+        #[arg(long, value_delimiter = ',')]
+        manager: Vec<ManagerArg>,
+        /// Emit single-line JSON instead of pretty-printed.
+        #[arg(long)]
+        compact: bool,
+    },
     /// Search applications, installed or available, across detected package managers.
     Search {
         /// Text matched against package names and descriptions.
@@ -90,7 +101,8 @@ impl Command {
         let args = match self {
             Command::List { manager, .. }
             | Command::Search { manager, .. }
-            | Command::Outdated { manager, .. } => manager,
+            | Command::Outdated { manager, .. }
+            | Command::Index { manager, .. } => manager,
         };
         (!args.is_empty()).then(|| args.iter().map(|arg| ManagerKind::from(*arg)).collect())
     }
@@ -100,7 +112,8 @@ impl Command {
         match self {
             Command::List { compact, .. }
             | Command::Search { compact, .. }
-            | Command::Outdated { compact, .. } => *compact,
+            | Command::Outdated { compact, .. }
+            | Command::Index { compact, .. } => *compact,
         }
     }
 }

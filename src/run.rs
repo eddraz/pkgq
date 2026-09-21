@@ -128,12 +128,76 @@ pub fn run_over(
     }
 
     dedup_deb_duplicates(&mut results);
+
+    // Optional semantic layer (search only): load the index and embed the
+    // query once. Used both to rescue indexed apps the lexical score rejected
+    // (cross-language or synonym queries) and to re-rank the results.
+    let semantic_state = if command == "search" {
+        query.and_then(|query| {
+            let index = crate::semantic::load_index()?;
+            let lookup = crate::semantic::embedding_lookup(&index);
+            let vector = crate::semantic::embed_texts(&[query.to_string()])
+                .ok()?
+                .into_iter()
+                .next()?;
+            Some((index, lookup, vector))
+        })
+    } else {
+        None
+    };
+
     if let Some(query) = query {
-        // Relevance gate and ranking: zero-score results (no token hit) are
-        // dropped, and `search` orders by score before falling back to name.
+        // Relevance gate: zero-score results (no token hit) are dropped unless
+        // the semantic layer rescues them with high similarity.
         let tokens = query_tokens(query);
-        results.retain(|app| relevance_score(&app.name, app.description.as_deref(), &tokens) > 0);
+        results.retain(|app| {
+            if relevance_score(&app.name, app.description.as_deref(), &tokens) > 0 {
+                return true;
+            }
+            if let Some((_, lookup, vector)) = &semantic_state {
+                return crate::semantic::similarity(lookup, &app.name, app.manager, vector)
+                    >= crate::semantic::SEMANTIC_RESCUE_THRESHOLD;
+            }
+            false
+        });
         if command == "search" {
+            // Semantic recall: indexed apps with high similarity become
+            // candidates even when no lexical token matched (cross-language
+            // queries). The similarity lookup is O(1).
+            if let Some((index, lookup, vector)) = &semantic_state {
+                let present: std::collections::HashSet<(String, ManagerKind)> = results
+                    .iter()
+                    .map(|app| (app.name.clone(), app.manager))
+                    .collect();
+                for item in &index.items {
+                    let similarity =
+                        crate::semantic::similarity(lookup, &item.name, item.manager, vector);
+                    if similarity >= crate::semantic::SEMANTIC_RESCUE_THRESHOLD
+                        && !present.contains(&(item.name.clone(), item.manager))
+                    {
+                        results.push(App {
+                            usage: None,
+                            install: None,
+                            installed_bytes: None,
+                            download_bytes: None,
+                            homepage: None,
+                            license: None,
+                            origin: None,
+                            arch: None,
+                            maintainer: None,
+                            section: None,
+                            depends: None,
+                            install_date: None,
+                            name: item.name.clone(),
+                            manager: item.manager,
+                            installed: item.installed,
+                            version: None,
+                            description: item.description.clone(),
+                            available_version: None,
+                        });
+                    }
+                }
+            }
             let mut scored: Vec<(i64, App)> = results
                 .drain(..)
                 .map(|app| {
@@ -146,6 +210,34 @@ pub fn run_over(
                     .cmp(&score_a)
                     .then_with(|| (&app_a.name, app_a.manager).cmp(&(&app_b.name, app_b.manager)))
             });
+            // Semantic re-rank: blend similarity (0.6) with the normalized
+            // lexical score (0.4) when the index and server are available.
+            if let Some((_, lookup, vector)) = &semantic_state {
+                let max_lexical = scored
+                    .iter()
+                    .map(|(score, _)| *score)
+                    .max()
+                    .unwrap_or(0)
+                    .max(1);
+                scored.sort_by(|(score_a, app_a), (score_b, app_b)| {
+                    let blended_a = crate::semantic::blended_score(
+                        *score_a,
+                        max_lexical,
+                        crate::semantic::similarity(lookup, &app_a.name, app_a.manager, vector),
+                    );
+                    let blended_b = crate::semantic::blended_score(
+                        *score_b,
+                        max_lexical,
+                        crate::semantic::similarity(lookup, &app_b.name, app_b.manager, vector),
+                    );
+                    blended_b
+                        .partial_cmp(&blended_a)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| {
+                            (&app_a.name, app_a.manager).cmp(&(&app_b.name, app_b.manager))
+                        })
+                });
+            }
             results.extend(scored.into_iter().map(|(_, app)| app));
         }
     }
