@@ -5,7 +5,7 @@ use crate::model::{App, ManagerError, ManagerKind};
 use crate::shell;
 
 /// A package manager backend the CLI can query.
-pub trait Provider {
+pub trait Provider: Send + Sync {
     fn kind(&self) -> ManagerKind;
 
     /// Whether the manager's binary is present on this system.

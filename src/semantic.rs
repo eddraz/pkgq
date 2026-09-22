@@ -75,6 +75,7 @@ pub fn embed_texts(texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
 }
 
 /// Build the semantic index over the (optionally filtered) local inventory.
+/// Reuses previously computed embeddings for applications whose text has not changed.
 pub fn build_index(
     selected: Option<&[ManagerKind]>,
 ) -> Result<serde_json::Value, Vec<ManagerError>> {
@@ -87,12 +88,49 @@ pub fn build_index(
             None => app.name.clone(),
         })
         .collect();
-    let embeddings = embed_texts(&texts).map_err(|e| {
-        vec![ManagerError {
-            manager: ManagerKind::Apt,
-            message: format!("semantic index: {e}"),
-        }]
-    })?;
+
+    // Reusable cache from current valid index if present
+    let existing_lookup: HashMap<(String, ManagerKind, String), Vec<f32>> = load_index()
+        .filter(|idx| idx.model == embeddings::model_repo())
+        .map(|idx| {
+            idx.items
+                .into_iter()
+                .map(|item| ((item.name, item.manager, item.text), item.embedding))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut needed_indices = Vec::new();
+    let mut needed_texts = Vec::new();
+    let mut embeddings: Vec<Option<Vec<f32>>> = Vec::with_capacity(texts.len());
+    let mut reused = 0;
+
+    for (i, (app, text)) in output.results.iter().zip(texts.iter()).enumerate() {
+        if let Some(cached_vec) = existing_lookup.get(&(app.name.clone(), app.manager, text.clone())) {
+            embeddings.push(Some(cached_vec.clone()));
+            reused += 1;
+        } else {
+            embeddings.push(None);
+            needed_indices.push(i);
+            needed_texts.push(text.clone());
+        }
+    }
+
+    let computed = needed_texts.len();
+    if !needed_texts.is_empty() {
+        let new_embeddings = embed_texts(&needed_texts).map_err(|e| {
+            vec![ManagerError {
+                manager: ManagerKind::Apt,
+                message: format!("semantic index: {e}"),
+            }]
+        })?;
+        for (idx, vec) in needed_indices.into_iter().zip(new_embeddings) {
+            embeddings[idx] = Some(vec);
+        }
+    }
+
+    let final_embeddings: Vec<Vec<f32>> =
+        embeddings.into_iter().map(|e| e.unwrap_or_default()).collect();
 
     let index = SemanticIndex {
         model: embeddings::model_repo(),
@@ -102,7 +140,7 @@ pub fn build_index(
             .results
             .iter()
             .zip(texts.iter())
-            .zip(embeddings.iter())
+            .zip(final_embeddings.iter())
             .map(|((app, text), embedding)| IndexItem {
                 name: app.name.clone(),
                 manager: app.manager,
@@ -129,6 +167,8 @@ pub fn build_index(
     Ok(serde_json::json!({
         "command": "index",
         "indexed": index.items.len(),
+        "reused": reused,
+        "computed": computed,
         "model": index.model,
         "cache": path.to_string_lossy(),
         "generated_at": index.generated_at,

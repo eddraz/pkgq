@@ -56,7 +56,7 @@ pub(crate) fn parse_sync_search(output: &str) -> Vec<SyncHit> {
         };
         let rest = rest.trim();
         let (version, installed) = match rest.strip_prefix("[").and_then(|v| v.strip_suffix("]")) {
-            Some(inner) if inner == "installed" => ("", true),
+            Some("installed") => ("", true),
             _ => {
                 let mut fields = rest.split_whitespace();
                 let version = fields.next().unwrap_or("");
@@ -164,7 +164,7 @@ pub(crate) fn parse_details_output(output: &str) -> HashMap<String, PacmanDetail
 /// First executable per installed package, one grep over pacman's file lists.
 pub(crate) fn binary_map() -> HashMap<String, String> {
     let cmd = "grep -H -m1 -E '/s?bin/.' /var/lib/pacman/local/*/files 2>/dev/null || true";
-    let output = shell::run(&cmd).unwrap_or_default();
+    let output = shell::run(cmd).unwrap_or_default();
     parse_files_output(&output)
 }
 

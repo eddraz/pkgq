@@ -44,18 +44,29 @@ pub fn run_outdated_over(
     let mut errors: Vec<ManagerError> = Vec::new();
     let mut managers_detected: Vec<ManagerKind> = Vec::new();
 
-    for provider in reg {
-        let kind = provider.kind();
-        if !available.contains(&kind) {
-            continue;
-        }
-        if let Some(sel) = selected {
-            if !sel.contains(&kind) {
-                continue;
-            }
-        }
-        managers_detected.push(kind);
-        match provider.outdated() {
+    let selected_providers: Vec<&Box<dyn crate::provider::Provider>> = reg
+        .iter()
+        .filter(|p| {
+            let kind = p.kind();
+            available.contains(&kind) && selected.is_none_or(|sel| sel.contains(&kind))
+        })
+        .collect();
+
+    for p in &selected_providers {
+        managers_detected.push(p.kind());
+    }
+
+    let outcomes: Vec<Result<Vec<App>, ManagerError>> = std::thread::scope(|s| {
+        let handles: Vec<_> = selected_providers
+            .iter()
+            .map(|provider| s.spawn(move || provider.outdated()))
+            .collect();
+
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+
+    for outcome in outcomes {
+        match outcome {
             Ok(mut apps) => results.append(&mut apps),
             Err(e) => errors.push(e),
         }
@@ -89,7 +100,7 @@ pub(crate) fn dedup_deb_duplicates(results: &mut Vec<App>) {
     results.retain(|app| {
         !(app.manager == ManagerKind::Apt
             && app.installed
-            && dpkg_names.iter().any(|name| *name == app.name))
+            && dpkg_names.contains(&app.name))
     });
 }
 
@@ -106,26 +117,34 @@ pub fn run_over(
     let mut errors: Vec<ManagerError> = Vec::new();
     let mut managers_detected: Vec<ManagerKind> = Vec::new();
 
-    for provider in reg {
-        let kind = provider.kind();
-        // Canonical order and no duplicates come from the registry itself.
-        if !available.contains(&kind) {
-            continue;
-        }
-        if let Some(sel) = selected {
-            if !sel.contains(&kind) {
-                continue;
-            }
-        }
-        managers_detected.push(kind);
-        let outcome = match (query, filters.installed_only) {
-            // Fast path: --installed-only never touches remote catalogs; the
-            // local inventories are scored directly, so the command works
-            // offline and returns instantly.
-            (Some(_), true) => provider.list_installed(),
-            (Some(query), false) => provider.search(query),
-            (None, _) => provider.list_installed(),
-        };
+    let selected_providers: Vec<&Box<dyn crate::provider::Provider>> = reg
+        .iter()
+        .filter(|p| {
+            let kind = p.kind();
+            available.contains(&kind) && selected.is_none_or(|sel| sel.contains(&kind))
+        })
+        .collect();
+
+    for p in &selected_providers {
+        managers_detected.push(p.kind());
+    }
+
+    let outcomes: Vec<Result<Vec<App>, ManagerError>> = std::thread::scope(|s| {
+        let handles: Vec<_> = selected_providers
+            .iter()
+            .map(|provider| {
+                s.spawn(move || match (query, filters.installed_only) {
+                    (Some(_), true) => provider.list_installed(),
+                    (Some(query), false) => provider.search(query),
+                    (None, _) => provider.list_installed(),
+                })
+            })
+            .collect();
+
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+
+    for outcome in outcomes {
         match outcome {
             Ok(mut apps) => results.append(&mut apps),
             Err(e) => errors.push(e),
