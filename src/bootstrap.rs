@@ -1,18 +1,69 @@
-//! First-run bootstrap: ensures the native embedding assets exist in the
-//! Hugging Face cache.
+//! First-run bootstrap: ensures the bge-m3 embedding model exists in `~/models/`.
 //!
-//! Verification is a cheap filesystem scan; the (potentially slow) download
-//! only happens when `model.safetensors` or `tokenizer.json` is missing.  Set
-//! `PKGQ_NO_BOOTSTRAP=1` to skip entirely.
+//! Download happens with `curl` from Hugging Face GGML (bge-m3-q8_0.gguf).
+//! Set `PKGQ_NO_BOOTSTRAP=1` to skip entirely.
 
-use crate::embeddings;
+use std::path::{Path, PathBuf};
 
-/// Ensure the configured embedding model and tokenizer are cached.
-///
-/// Returns human-readable progress/warning messages; the operation is
-/// warnings-only and never fails the caller.
-pub fn ensure() -> Vec<String> {
-    embeddings::prewarm_cache()
+use crate::shell;
+
+pub const MODEL_FILE_NAME: &str = "bge-m3-q8_0.gguf";
+pub const MODEL_URL: &str =
+    "https://huggingface.co/ggml-org/bge-m3-Q8_0-GGUF/resolve/main/bge-m3-q8_0.gguf?download=true";
+
+pub fn home_dir() -> PathBuf {
+    PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()))
+}
+
+pub fn models_dir(home: &Path) -> PathBuf {
+    home.join("models")
+}
+
+pub fn model_path(home: &Path) -> PathBuf {
+    models_dir(home).join(MODEL_FILE_NAME)
+}
+
+/// Whether the model file exists in `~/models`, matching the expected file
+/// name case-insensitively (`bge-m3-q8_0.gguf` / `bge-m3-Q8_0.gguf`).
+pub fn model_present(home: &Path) -> bool {
+    models_dir(home)
+        .read_dir()
+        .map(|entries| {
+            entries.filter_map(std::result::Result::ok).any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(MODEL_FILE_NAME)
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Ensure the model asset exists, downloading with curl if missing.
+pub fn ensure(home: &Path) -> Vec<String> {
+    let mut messages: Vec<String> = Vec::new();
+
+    if !model_present(home) {
+        let target = model_path(home);
+        messages.push(format!(
+            "bootstrap: downloading bge-m3 model into {} ...",
+            target.display()
+        ));
+        let cmd = format!(
+            "curl -fL --create-dirs -o {} {}",
+            shell::quote(&target.to_string_lossy()),
+            shell::quote(MODEL_URL)
+        );
+        match shell::run(&cmd) {
+            Ok(_) => messages.push(format!("model saved to {}", target.display())),
+            Err(e) => messages.push(format!(
+                "WARNING: model download failed ({}); semantic search setup incomplete",
+                e
+            )),
+        }
+    }
+
+    messages
 }
 
 /// Entry point called at the start of every binary execution. Prints
@@ -24,7 +75,8 @@ pub fn run_if_enabled() {
     {
         return;
     }
-    for message in ensure() {
+    let home = home_dir();
+    for message in ensure(&home) {
         eprintln!("pkgq: {message}");
     }
 }
@@ -32,69 +84,30 @@ pub fn run_if_enabled() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
-    fn with_env(key: &str, value: Option<&str>) -> Option<String> {
-        let previous = std::env::var(key).ok();
-        match value {
-            Some(value) => std::env::set_var(key, value),
-            None => std::env::remove_var(key),
-        }
-        previous
-    }
-
-    fn restore_env(key: &str, previous: Option<String>) {
-        match previous {
-            Some(previous) => std::env::set_var(key, previous),
-            None => std::env::remove_var(key),
-        }
+    #[test]
+    fn paths_live_under_home() {
+        let home = Path::new("/home/tester");
+        assert_eq!(
+            model_path(home),
+            PathBuf::from("/home/tester/models/bge-m3-q8_0.gguf")
+        );
     }
 
     #[test]
-    fn cache_dir_defaults_under_home() {
-        let _guard = embeddings::ENV_TEST_LOCK.lock().unwrap();
-        let prev_home = with_env("HF_HOME", None);
-        let prev_hub = with_env("HF_HUB_CACHE", None);
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/user".to_string());
-        assert_eq!(
-            embeddings::hf_cache_dir(),
-            PathBuf::from(home).join(".cache/huggingface/hub")
-        );
-        restore_env("HF_HOME", prev_home);
-        restore_env("HF_HUB_CACHE", prev_hub);
+    fn model_detection_is_case_insensitive() {
+        let base = std::env::temp_dir().join(format!("pkgq-bootstrap-{}", std::process::id()));
+        let models = models_dir(&base);
+        std::fs::create_dir_all(&models).unwrap();
+        assert!(!model_present(&base));
+        std::fs::write(models.join("bge-m3-Q8_0.gguf"), b"x").unwrap();
+        assert!(model_present(&base));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
-    fn cache_dir_respects_hf_home() {
-        let _guard = embeddings::ENV_TEST_LOCK.lock().unwrap();
-        let prev_home = with_env("HF_HOME", Some("/tmp/pkgq-hf-home"));
-        let prev_hub = with_env("HF_HUB_CACHE", None);
-        assert_eq!(
-            embeddings::hf_cache_dir(),
-            PathBuf::from("/tmp/pkgq-hf-home/hub")
-        );
-        restore_env("HF_HOME", prev_home);
-        restore_env("HF_HUB_CACHE", prev_hub);
-    }
-
-    #[test]
-    fn cache_dir_respects_hf_hub_cache() {
-        let _guard = embeddings::ENV_TEST_LOCK.lock().unwrap();
-        let prev_home = with_env("HF_HOME", Some("/tmp/pkgq-hf-home"));
-        let prev_hub = with_env("HF_HUB_CACHE", Some("/tmp/pkgq-hub-cache"));
-        assert_eq!(
-            embeddings::hf_cache_dir(),
-            PathBuf::from("/tmp/pkgq-hub-cache")
-        );
-        restore_env("HF_HOME", prev_home);
-        restore_env("HF_HUB_CACHE", prev_hub);
-    }
-
-    #[test]
-    fn repo_cache_name_replaces_slashes() {
-        assert_eq!(
-            embeddings::repo_cache_name("BAAI/bge-m3"),
-            "models--BAAI--bge-m3"
-        );
+    fn missing_models_dir_is_not_present() {
+        let base = std::env::temp_dir().join(format!("pkgq-bootstrap-none-{}", std::process::id()));
+        assert!(!model_present(&base));
     }
 }

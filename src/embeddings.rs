@@ -10,7 +10,6 @@ use candle_core::{DType, Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::xlm_roberta::Config as XlmRobertaConfig;
 use candle_transformers::models::xlm_roberta::XLMRobertaModel;
-use hf_hub::api::sync::ApiBuilder;
 use tokenizers::tokenizer::{PaddingParams, Tokenizer, TruncationParams};
 
 /// Stable identifier for this embedding backend.  Written into the semantic
@@ -307,62 +306,6 @@ pub fn batch_ranges(total: usize, batch_size: usize) -> Vec<(usize, usize)> {
         .collect()
 }
 
-/// Ensure the model and tokenizer are present in the HF cache.
-///
-/// Returns progress/warning messages; the operation is warnings-only and
-/// never fails the caller.
-pub fn prewarm_cache() -> Vec<String> {
-    let mut messages = Vec::new();
-    let repo_id = model_repo();
-
-    if cached_model_files().is_some() {
-        // Silent success: a fully cached setup must not add stderr noise to
-        // every single pkgq invocation.
-        return messages;
-    }
-
-    messages.push(format!("bootstrap: prewarming HF cache for {repo_id} ..."));
-
-    let cache_dir = hf_cache_dir();
-    let api = match ApiBuilder::new()
-        .with_cache_dir(cache_dir)
-        .build()
-        .map_err(|e| e.to_string())
-    {
-        Ok(api) => api,
-        Err(e) => {
-            messages.push(format!(
-                "WARNING: failed to initialize Hugging Face API ({e}); semantic search setup incomplete"
-            ));
-            return messages;
-        }
-    };
-
-    let repo = api.model(repo_id.clone());
-    for filename in ["model.safetensors", "tokenizer.json"] {
-        let mut download_res = repo.get(filename);
-        if download_res.is_err()
-            && repo_id == DEFAULT_MODEL_REPO
-            && filename == "model.safetensors"
-        {
-            let fallback_repo = api.model(FALLBACK_MODEL_REPO.to_string());
-            if let Ok(path) = fallback_repo.get(filename) {
-                download_res = Ok(path);
-            }
-        }
-        match download_res {
-            Ok(path) => messages.push(format!(
-                "bootstrap: cached {filename} at {}",
-                path.display()
-            )),
-            Err(e) => messages.push(format!(
-                "WARNING: failed to cache {filename} for {repo_id} ({e}); semantic search setup incomplete"
-            )),
-        }
-    }
-
-    messages
-}
 
 #[cfg(test)]
 pub(crate) static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
