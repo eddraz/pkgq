@@ -77,11 +77,52 @@ pub fn repo_cache_dir(repo_id: &str) -> PathBuf {
     hf_cache_dir().join(repo_cache_name(repo_id))
 }
 
-/// Resolve paths to the bge-m3 weights and tokenizer from the HF cache.
+/// Fallback Hugging Face repo id when `model.safetensors` is missing upstream.
+pub const FALLBACK_MODEL_REPO: &str = "Shitao/bge-m3";
+
+/// Check candidate local directories for model weights and tokenizer before querying HF hub cache.
+fn find_local_model_files() -> Option<(PathBuf, PathBuf)> {
+    let home = std::env::var("HOME").ok().map(PathBuf::from)?;
+    let mut candidate_dirs = Vec::new();
+    if let Ok(dir) = std::env::var("PKGQ_MODELS_DIR") {
+        if !dir.is_empty() {
+            candidate_dirs.push(PathBuf::from(dir));
+        }
+    }
+    candidate_dirs.push(home.join("models").join("bge-m3"));
+    candidate_dirs.push(home.join("models"));
+
+    for dir in candidate_dirs {
+        if !dir.is_dir() {
+            continue;
+        }
+        let weights = ["model.safetensors", "pytorch_model.bin"]
+            .iter()
+            .map(|name| dir.join(name))
+            .find(|p| p.is_file());
+        let tokenizer = ["tokenizer.json"]
+            .iter()
+            .map(|name| dir.join(name))
+            .find(|p| p.is_file());
+
+        if let (Some(w), Some(t)) = (weights, tokenizer) {
+            return Some((w, t));
+        }
+    }
+    None
+}
+
+/// Resolve paths to the bge-m3 weights and tokenizer from local directories or the HF cache.
 /// Returns `None` when either file is missing.
 pub fn cached_model_files() -> Option<(PathBuf, PathBuf)> {
-    let weights = find_cached_file(&model_repo(), "model.safetensors")?;
-    let tokenizer = find_cached_file(&model_repo(), "tokenizer.json")?;
+    if let Some(files) = find_local_model_files() {
+        return Some(files);
+    }
+    let repo = model_repo();
+    let weights = find_cached_file(&repo, "model.safetensors")
+        .or_else(|| find_cached_file(FALLBACK_MODEL_REPO, "model.safetensors"))?;
+    let tokenizer = find_cached_file(&repo, "tokenizer.json")
+        .or_else(|| find_cached_file(FALLBACK_MODEL_REPO, "tokenizer.json"))?;
     Some((weights, tokenizer))
 }
 
@@ -131,17 +172,27 @@ pub fn embed_texts(texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
     }
 
     let (weights_path, tokenizer_path) = cached_model_files().ok_or_else(|| {
-        "bge-m3 weights not found in HF cache (run once with network, or unset PKGQ_NO_BOOTSTRAP)"
+        "bge-m3 weights not found in local models or HF cache (run once with network, or unset PKGQ_NO_BOOTSTRAP)"
             .to_string()
     })?;
 
     let device = Device::Cpu;
-    let vb = unsafe {
-        // Safety: inherited from `memmap2`.  The weights file is read-only
-        // and remains unchanged for the lifetime of the process.
-        VarBuilder::from_mmaped_safetensors(&[&weights_path], DType::F32, &device)
-    }
-    .map_err(|e| format!("failed to load safetensors: {e}"))?;
+    let is_bin = weights_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext == "bin" || ext == "pth");
+
+    let vb = if is_bin {
+        VarBuilder::from_pth(&weights_path, DType::F32, &device)
+            .map_err(|e| format!("failed to load pytorch model: {e}"))?
+    } else {
+        unsafe {
+            // Safety: inherited from `memmap2`.  The weights file is read-only
+            // and remains unchanged for the lifetime of the process.
+            VarBuilder::from_mmaped_safetensors(&[&weights_path], DType::F32, &device)
+        }
+        .map_err(|e| format!("failed to load safetensors: {e}"))?
+    };
 
     let config = xlm_roberta_config();
     let model = XLMRobertaModel::new(&config, vb)
@@ -289,7 +340,17 @@ pub fn prewarm_cache() -> Vec<String> {
 
     let repo = api.model(repo_id.clone());
     for filename in ["model.safetensors", "tokenizer.json"] {
-        match repo.get(filename) {
+        let mut download_res = repo.get(filename);
+        if download_res.is_err()
+            && repo_id == DEFAULT_MODEL_REPO
+            && filename == "model.safetensors"
+        {
+            let fallback_repo = api.model(FALLBACK_MODEL_REPO.to_string());
+            if let Ok(path) = fallback_repo.get(filename) {
+                download_res = Ok(path);
+            }
+        }
+        match download_res {
             Ok(path) => messages.push(format!(
                 "bootstrap: cached {filename} at {}",
                 path.display()
