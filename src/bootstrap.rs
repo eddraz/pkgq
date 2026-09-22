@@ -23,20 +23,35 @@ pub fn model_path(home: &Path) -> PathBuf {
     models_dir(home).join(MODEL_FILE_NAME)
 }
 
-/// Whether the model file exists in `~/models`, matching the expected file
-/// name case-insensitively (`bge-m3-q8_0.gguf` / `bge-m3-Q8_0.gguf`).
+/// Whether the model exists in `~/models` or `~/models/bge-m3`,
+/// checking for either `bge-m3-q8_0.gguf` (case-insensitively) or
+/// native weights (`pytorch_model.bin` / `model.safetensors` + `tokenizer.json`).
 pub fn model_present(home: &Path) -> bool {
-    models_dir(home)
-        .read_dir()
-        .map(|entries| {
-            entries.filter_map(std::result::Result::ok).any(|entry| {
-                entry
+    let candidate_dirs = [models_dir(home), models_dir(home).join("bge-m3")];
+
+    for dir in candidate_dirs {
+        if !dir.is_dir() {
+            continue;
+        }
+        if let Ok(entries) = dir.read_dir() {
+            for entry in entries.flatten() {
+                if entry
                     .file_name()
                     .to_string_lossy()
                     .eq_ignore_ascii_case(MODEL_FILE_NAME)
-            })
-        })
-        .unwrap_or(false)
+                {
+                    return true;
+                }
+            }
+        }
+        let has_weights = dir.join("model.safetensors").is_file() || dir.join("pytorch_model.bin").is_file();
+        let has_tokenizer = dir.join("tokenizer.json").is_file();
+        if has_weights && has_tokenizer {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Ensure the model asset exists, downloading with curl if missing.
@@ -109,5 +124,18 @@ mod tests {
     fn missing_models_dir_is_not_present() {
         let base = std::env::temp_dir().join(format!("pkgq-bootstrap-none-{}", std::process::id()));
         assert!(!model_present(&base));
+    }
+
+    #[test]
+    fn native_model_detection_recognizes_pytorch_weights() {
+        let base = std::env::temp_dir().join(format!("pkgq-bootstrap-native-{}", std::process::id()));
+        let bge_dir = models_dir(&base).join("bge-m3");
+        std::fs::create_dir_all(&bge_dir).unwrap();
+        assert!(!model_present(&base));
+        std::fs::write(bge_dir.join("pytorch_model.bin"), b"dummy").unwrap();
+        assert!(!model_present(&base)); // still missing tokenizer.json
+        std::fs::write(bge_dir.join("tokenizer.json"), b"dummy").unwrap();
+        assert!(model_present(&base));
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
