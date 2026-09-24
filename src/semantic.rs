@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::embeddings;
 use crate::model::{ManagerError, ManagerKind};
 use crate::run;
+use crate::shell;
 
 /// Semantic dominates for cross-language queries; lexical keeps precision.
 const SEMANTIC_WEIGHT: f64 = 0.6;
@@ -69,8 +70,83 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f64 {
     }
 }
 
-/// Embed texts through the native candle engine.
+/// Query embeddings from llama-server running on port 43210.
+pub fn embed_texts_via_server(texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+    let url = format!(
+        "http://127.0.0.1:{}/v1/embeddings",
+        crate::bootstrap::EMBEDDINGS_PORT
+    );
+    let mut all = Vec::with_capacity(texts.len());
+
+    for (batch_index, batch) in texts.chunks(16).enumerate() {
+        let body = serde_json::json!({
+            "model": "bge-m3",
+            "input": batch,
+        });
+        let body_str = serde_json::to_string(&body).map_err(|e| e.to_string())?;
+        let body_file = std::env::temp_dir().join(format!(
+            "pkgq-embed-{}-{batch_index}.json",
+            std::process::id()
+        ));
+        std::fs::write(&body_file, body_str).map_err(|e| e.to_string())?;
+
+        let cmd = format!(
+            "curl -s -m 15 -X POST {} -H 'Content-Type: application/json' --data-binary @{}",
+            shell::quote(&url),
+            shell::quote(&body_file.to_string_lossy())
+        );
+        let response = shell::run(&cmd);
+        let _ = std::fs::remove_file(&body_file);
+
+        let response = response.map_err(|e| e.to_string())?;
+        let value: serde_json::Value = serde_json::from_str(response.trim())
+            .map_err(|e| format!("non-JSON embeddings response from llama-server: {e}"))?;
+
+        let data = value
+            .get("data")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| "embeddings response has no 'data' array".to_string())?;
+
+        let mut indexed: Vec<(usize, Vec<f32>)> = Vec::with_capacity(data.len());
+        for item in data {
+            let index = item
+                .get("index")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0) as usize;
+            let embedding = item
+                .get("embedding")
+                .and_then(serde_json::Value::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(serde_json::Value::as_f64)
+                        .map(|v| v as f32)
+                        .collect()
+                })
+                .unwrap_or_default();
+            indexed.push((index, embedding));
+        }
+        indexed.sort_by_key(|(i, _)| *i);
+        all.extend(indexed.into_iter().map(|(_, emb)| emb));
+    }
+
+    if all.len() == texts.len() {
+        Ok(all)
+    } else {
+        Err("mismatched embedding count from llama-server".to_string())
+    }
+}
+
+/// Embed texts through active llama-server on port 43210 (if active), or native candle engine.
 pub fn embed_texts(texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+    if texts.is_empty() {
+        return Ok(Vec::new());
+    }
+    if crate::bootstrap::is_port_active(crate::bootstrap::EMBEDDINGS_PORT) {
+        if let Ok(embeddings) = embed_texts_via_server(texts) {
+            return Ok(embeddings);
+        }
+    }
     embeddings::embed_texts(texts)
 }
 
@@ -106,7 +182,9 @@ pub fn build_index(
     let mut reused = 0;
 
     for (i, (app, text)) in output.results.iter().zip(texts.iter()).enumerate() {
-        if let Some(cached_vec) = existing_lookup.get(&(app.name.clone(), app.manager, text.clone())) {
+        if let Some(cached_vec) =
+            existing_lookup.get(&(app.name.clone(), app.manager, text.clone()))
+        {
             embeddings.push(Some(cached_vec.clone()));
             reused += 1;
         } else {
@@ -129,8 +207,10 @@ pub fn build_index(
         }
     }
 
-    let final_embeddings: Vec<Vec<f32>> =
-        embeddings.into_iter().map(|e| e.unwrap_or_default()).collect();
+    let final_embeddings: Vec<Vec<f32>> = embeddings
+        .into_iter()
+        .map(|e| e.unwrap_or_default())
+        .collect();
 
     let index = SemanticIndex {
         model: embeddings::model_repo(),

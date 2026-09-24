@@ -87,9 +87,7 @@ pub fn run_with_timeout(command: &str, timeout: std::time::Duration) -> Result<S
         Ok((status, stdout, stderr)) => {
             let _ = reader_thread.join();
             match status {
-                Ok(status) if status.success() => {
-                    Ok(String::from_utf8_lossy(&stdout).into_owned())
-                }
+                Ok(status) if status.success() => Ok(String::from_utf8_lossy(&stdout).into_owned()),
                 Ok(status) => Err(ShellError {
                     command: command.to_string(),
                     stderr: String::from_utf8_lossy(&stderr).into_owned(),

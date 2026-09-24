@@ -43,3 +43,4 @@ for embeddings.
 - Parent fix: prewarm_cache silent when cached (stderr noise regression caught in parent review)
 - Independent verification (gentle-ai-verify) 7/7 PASS: offline tests guaranteed, no onig/openssl in tree, rustls TLS, no cert-weakening, no llama-server leftovers in code, staleness confirmed, stderr clean, `list --compact` valid JSON (1855 items)
 - Unverified by design: real-model end-to-end (#[ignore] test; requires 2.3 GB download) — first real `pkgq index` run exercises it
+- Follow-up (bootstrap evolution, user-directed): first-run validation order — llama-server detection with port reuse (43210 embeddings / 43211 LFM2.5 / 43212 K2), candle in-process fallback verifying/downloading native weights into ~/models/bge-m3/; GGUF curl bootstrap restored earlier on master

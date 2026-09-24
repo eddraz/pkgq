@@ -306,7 +306,6 @@ pub fn batch_ranges(total: usize, batch_size: usize) -> Vec<(usize, usize)> {
         .collect()
 }
 
-
 #[cfg(test)]
 pub(crate) static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

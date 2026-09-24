@@ -98,9 +98,7 @@ pub(crate) fn dedup_deb_duplicates(results: &mut Vec<App>) {
         return;
     }
     results.retain(|app| {
-        !(app.manager == ManagerKind::Apt
-            && app.installed
-            && dpkg_names.contains(&app.name))
+        !(app.manager == ManagerKind::Apt && app.installed && dpkg_names.contains(&app.name))
     });
 }
 
